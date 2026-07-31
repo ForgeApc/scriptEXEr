@@ -479,6 +479,17 @@ body {
 }
 .card-img .img-gradient { position: absolute; inset: 0; opacity: 1; }
 .card-img .emoji { position: relative; z-index: 1; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.6)); }
+
+/* Custom PNG thumbnails (games / scripts / executors / detail headers) */
+.thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+}
+.detail-thumb .thumb-img { border-radius: var(--radius); }
 .card-body { padding: 16px 18px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .card-title { font-weight: 700; font-size: 1.02rem; color: #fff; }
 .card-sub { font-size: 0.8rem; color: var(--text-dim); }
@@ -1070,6 +1081,163 @@ body {
 
 @media (max-width: 400px) {
   .grid-games, .grid-exploits, .grid-executors { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   Admin panel
+   ============================================================ */
+.admin-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 30px;
+}
+.admin-stat {
+  flex: 1;
+  min-width: 120px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  text-align: center;
+}
+.admin-stat-num { display: block; font-size: 1.8rem; font-weight: 800; color: #fff; }
+.admin-stat-label { font-size: 0.78rem; color: var(--text-dim); }
+
+.admin-section { margin-bottom: 38px; }
+.admin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.admin-section-head .section-label { margin: 0; }
+
+/* Circular "+" button in the top corner of each admin section */
+.admin-fab {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-bg-strong);
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform .25s var(--ease-out), background .25s var(--ease-out), border-color .25s var(--ease-out);
+}
+.admin-fab:hover { background: #fff; color: #000; border-color: #fff; transform: scale(1.08); }
+.admin-fab:active { scale: .92; }
+
+/* Admin cards reuse .card but aren't links, so give them the same look
+   plus an edit/delete overlay in the top-right corner. */
+.admin-card {
+  position: relative;
+  cursor: default;
+}
+.admin-card-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity .25s var(--ease-out), transform .25s var(--ease-out);
+}
+.admin-card:hover .admin-card-actions,
+.admin-card:focus-within .admin-card-actions { opacity: 1; transform: translateY(0); }
+@media (pointer: coarse) {
+  .admin-card-actions { opacity: 1; transform: none; }
+}
+.admin-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border-strong);
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .2s var(--ease-out), border-color .2s var(--ease-out), scale .15s var(--ease-out);
+}
+.admin-icon-btn:hover { border-color: rgba(255,255,255,0.4); }
+.admin-icon-btn.edit:hover { background: #ffffff; color: #000; }
+.admin-icon-btn.del:hover { background: #e5484d; border-color: #e5484d; color: #fff; }
+.admin-icon-btn:active { scale: .9; }
+
+.admin-data-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.admin-btn {
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-bg-strong);
+  color: var(--text-soft);
+  padding: 9px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background .2s var(--ease-out), color .2s var(--ease-out), border-color .2s var(--ease-out);
+}
+.admin-btn:hover { background: #fff; color: #000; border-color: #fff; }
+.admin-btn-secondary:hover { background: #e5484d; border-color: #e5484d; color: #fff; }
+
+/* Admin add/edit modal form fields */
+.admin-modal { max-width: 480px; width: 92vw; max-height: 86vh; overflow-y: auto; text-align: left; }
+.admin-modal-title { margin-bottom: 18px; }
+.admin-modal-body { display: flex; flex-direction: column; gap: 14px; }
+.admin-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--text-soft); }
+.admin-field em { color: var(--text-dim); font-style: normal; font-size: 0.78rem; }
+.admin-field input[type="text"],
+.admin-field input[type="number"],
+.admin-field textarea,
+.admin-field select {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  font-family: var(--font);
+  resize: vertical;
+}
+.admin-field input:focus,
+.admin-field textarea:focus,
+.admin-field select:focus { outline: none; border-color: var(--glass-border-strong); }
+.admin-field-inline { flex-direction: row; align-items: center; gap: 8px; }
+.admin-field-inline input { width: auto; }
+.admin-image-preview { margin-top: 4px; }
+.admin-image-preview img {
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+}
+.admin-preview-err { font-size: 0.78rem; color: var(--text-dim); }
+.admin-modal-body .admin-btn-save {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
+  padding: 12px 16px;
+  margin-top: 4px;
+}
+.admin-modal-body .admin-btn-save:hover { background: var(--accent-soft); }
+
+@media (max-width: 640px) {
+  .admin-fab { width: 34px; height: 34px; font-size: 1.1rem; }
+  .admin-icon-btn { width: 27px; height: 27px; }
 }
 
 /* Reduced motion */

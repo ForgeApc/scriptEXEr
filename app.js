@@ -41,7 +41,7 @@
         <a class="card exploit-card" href="#/game/${game.id}/${e.id}">
           <div class="card-img">
             <span class="img-gradient"></span>
-            <span class="emoji">${e.emoji}</span>
+            ${thumbDisplay(e)}
           </div>
           <div class="card-body">
             <div class="exploit-row-head">
@@ -167,7 +167,7 @@
         <a class="card" href="#/game/${g.id}">
           <div class="card-img">
             <span class="img-gradient" style="background:${g.gradient}"></span>
-            <span class="emoji">${g.emoji}</span>
+            ${thumbDisplay(g)}
           </div>
           <div class="card-body">
             <span class="card-title">${escapeHtml(g.name)}</span>
@@ -221,7 +221,7 @@
         <div class="detail-header">
           <div class="detail-thumb glass">
             <span class="img-gradient" style="position:absolute;inset:0;border-radius:18px;opacity:0.85"></span>
-            <span style="position:relative">${game.emoji}</span>
+            <span style="position:relative">${thumbDisplay(game)}</span>
           </div>
           <div class="detail-title-block">
             <h1>${escapeHtml(game.name)}</h1>
@@ -255,7 +255,7 @@
         <div class="detail-header">
           <div class="detail-thumb glass">
             <span class="img-gradient" style="position:absolute;inset:0;border-radius:18px;opacity:0.85"></span>
-            <span style="position:relative">${exploit.emoji}</span>
+            <span style="position:relative">${thumbDisplay(exploit)}</span>
           </div>
           <div class="detail-title-block">
             <div class="detail-tags">
@@ -321,7 +321,7 @@
         <a class="card executor-card" href="#/executor/${ex.id}">
           <div class="executor-img">
             <span class="img-gradient" style="position:absolute;inset:0;background:${ex.gradient};opacity:0.6"></span>
-            <span class="emoji" style="position:relative">${ex.emoji}</span>
+            <span style="position:relative">${thumbDisplay(ex)}</span>
           </div>
           <div class="card-body" style="align-items:center;text-align:center">
             <span class="card-title">${escapeHtml(ex.name)}</span>
@@ -358,7 +358,7 @@
         <div class="detail-header">
           <div class="detail-thumb glass">
             <span class="img-gradient" style="position:absolute;inset:0;border-radius:18px;background:${ex.gradient};opacity:0.85"></span>
-            <span style="position:relative">${ex.emoji}</span>
+            <span style="position:relative">${thumbDisplay(ex)}</span>
           </div>
           <div class="detail-title-block">
             <h1>${escapeHtml(ex.name)}</h1>
@@ -388,12 +388,25 @@
      Admin Panel — add/edit/delete games, exploits, executors
      ============================================================ */
 
-  // Helper: pick the image to display. PNG image takes priority; else emoji.
-  function thumbDisplay(item, size) {
+  // Helper: pick the image to display. Custom image takes priority; else emoji.
+  function thumbDisplay(item) {
     if (item.image && /^https?:\/\//.test(item.image)) {
-      return `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name || item.title || "")}" class="thumb-img" style="width:${size}px;height:${size}px" onerror="this.style.display='none';this.nextElementSibling.style.display=''"/><span class="emoji" style="display:none">${escapeHtml(item.emoji || "🎮")}</span>`;
+      return `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name || item.title || "")}" class="thumb-img" onerror="this.style.display='none';this.nextElementSibling.style.display=''"/><span class="emoji" style="display:none">${escapeHtml(item.emoji || "🎮")}</span>`;
     }
     return `<span class="emoji">${escapeHtml(item.emoji || "🎮")}</span>`;
+  }
+
+  /* Small circular icon button overlaid on an admin card (edit / delete). */
+  function adminCardActions(editAction, delAction, dataAttrs) {
+    return `
+      <div class="admin-card-actions">
+        <button class="admin-icon-btn edit" data-action="${editAction}" ${dataAttrs} aria-label="Edit" title="Edit">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+        <button class="admin-icon-btn del" data-action="${delAction}" ${dataAttrs} aria-label="Delete" title="Delete">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>
+        </button>
+      </div>`;
   }
 
   function viewAdmin() {
@@ -401,38 +414,39 @@
     const executors = DATA.executors;
     const totalExploits = games.reduce((n, g) => n + (g.exploits ? g.exploits.length : 0), 0);
 
-    const gameRows = games
+    const gameCards = games
       .map((g) => {
         const count = g.exploits ? g.exploits.length : 0;
         return `
-        <div class="admin-item" data-type="game" data-id="${escapeHtml(g.id)}">
-          <div class="admin-item-thumb">${thumbDisplay(g, 48)}</div>
-          <div class="admin-item-info">
-            <span class="admin-item-name">${escapeHtml(g.name)}</span>
-            <span class="admin-item-meta">${escapeHtml(g.sub || "")} · ${count} script${count === 1 ? "" : "s"}</span>
+        <div class="card admin-card">
+          ${adminCardActions("edit-game", "delete-game", `data-id="${escapeHtml(g.id)}"`)}
+          <div class="card-img">
+            <span class="img-gradient" style="background:${g.gradient || "linear-gradient(135deg,#1a1a1a,#050505)"}"></span>
+            ${thumbDisplay(g, 0)}
           </div>
-          <div class="admin-item-actions">
-            <button class="admin-btn admin-btn-edit" data-action="edit-game" data-id="${escapeHtml(g.id)}">Edit</button>
-            <button class="admin-btn admin-btn-del" data-action="delete-game" data-id="${escapeHtml(g.id)}">Delete</button>
+          <div class="card-body">
+            <span class="card-title">${escapeHtml(g.name)}</span>
+            <span class="card-sub">${escapeHtml(g.sub || "")}</span>
+            <span class="card-badge">${count} script${count === 1 ? "" : "s"}</span>
           </div>
         </div>`;
       })
       .join("");
 
-    const exploitRows = games
+    const exploitCards = games
       .map((g) =>
         (g.exploits || [])
           .map(
             (e) => `
-        <div class="admin-item" data-type="exploit" data-game="${escapeHtml(g.id)}" data-id="${escapeHtml(e.id)}">
-          <div class="admin-item-thumb">${thumbDisplay(e, 48)}</div>
-          <div class="admin-item-info">
-            <span class="admin-item-name">${escapeHtml(e.title)}</span>
-            <span class="admin-item-meta">${escapeHtml(g.name)}${e.verified ? ' · <span class="ok">✓ Verified</span>' : ' · Unverified'}${e.level ? ` · Lvl ${e.level}` : ""}</span>
+        <div class="card admin-card">
+          ${adminCardActions("edit-exploit", "delete-exploit", `data-game="${escapeHtml(g.id)}" data-id="${escapeHtml(e.id)}"`)}
+          <div class="card-img">
+            <span class="img-gradient"></span>
+            ${thumbDisplay(e, 0)}
           </div>
-          <div class="admin-item-actions">
-            <button class="admin-btn admin-btn-edit" data-action="edit-exploit" data-game="${escapeHtml(g.id)}" data-id="${escapeHtml(e.id)}">Edit</button>
-            <button class="admin-btn admin-btn-del" data-action="delete-exploit" data-game="${escapeHtml(g.id)}" data-id="${escapeHtml(e.id)}">Delete</button>
+          <div class="card-body">
+            <span class="card-title">${escapeHtml(e.title)}</span>
+            <span class="card-sub">${escapeHtml(g.name)}${e.verified ? " · ✓ Verified" : " · Unverified"}${e.level ? ` · Lvl ${e.level}` : ""}</span>
           </div>
         </div>`
           )
@@ -440,18 +454,18 @@
       )
       .join("");
 
-    const executorRows = executors
+    const executorCards = executors
       .map(
         (ex) => `
-        <div class="admin-item" data-type="executor" data-id="${escapeHtml(ex.id)}">
-          <div class="admin-item-thumb">${thumbDisplay(ex, 48)}</div>
-          <div class="admin-item-info">
-            <span class="admin-item-name">${escapeHtml(ex.name)}</span>
-            <span class="admin-item-meta">${ex.features ? ex.features.length : 0} features</span>
+        <div class="card admin-card">
+          ${adminCardActions("edit-executor", "delete-executor", `data-id="${escapeHtml(ex.id)}"`)}
+          <div class="card-img executor-img">
+            <span class="img-gradient" style="background:${ex.gradient || "linear-gradient(135deg,#1a1a1a,#050505)"}"></span>
+            ${thumbDisplay(ex, 0)}
           </div>
-          <div class="admin-item-actions">
-            <button class="admin-btn admin-btn-edit" data-action="edit-executor" data-id="${escapeHtml(ex.id)}">Edit</button>
-            <button class="admin-btn admin-btn-del" data-action="delete-executor" data-id="${escapeHtml(ex.id)}">Delete</button>
+          <div class="card-body" style="align-items:center;text-align:center">
+            <span class="card-title">${escapeHtml(ex.name)}</span>
+            <span class="card-sub">${ex.features ? ex.features.length : 0} features · ${ex.download ? "has download link" : "no download link"}</span>
           </div>
         </div>`
       )
@@ -460,8 +474,9 @@
     return `
       <section class="view admin-view">
         <a class="back-btn" href="#/">← Back to site</a>
-        <div class="admin-header">
-          <h1>⚙️ Admin Panel</h1>
+        <div class="page-hero">
+          <span class="eyebrow">SCRIPTEXER · Admin</span>
+          <h1>Admin Panel</h1>
           <p>Manage games, scripts, and executors. Changes are saved in your browser.</p>
         </div>
 
@@ -473,30 +488,34 @@
 
         <div class="admin-section">
           <div class="admin-section-head">
-            <h2>🎮 Games</h2>
-            <button class="admin-btn admin-btn-add" data-action="add-game">+ Add Game</button>
+            <p class="section-label">🎮 Games · ${games.length}</p>
+            <button class="admin-fab" data-action="add-game" aria-label="Add game" title="Add game">+</button>
           </div>
-          <div class="admin-list">${gameRows || '<p class="admin-empty">No games yet.</p>'}</div>
+          <div class="grid grid-games">${gameCards || ""}</div>
+          ${gameCards ? "" : '<div class="empty-state"><span class="emoji">🎮</span><p>No games yet — hit + to add one.</p></div>'}
         </div>
 
         <div class="admin-section">
           <div class="admin-section-head">
-            <h2>📜 Scripts</h2>
+            <p class="section-label">📜 Scripts · ${totalExploits}</p>
+            <button class="admin-fab" data-action="add-exploit" aria-label="Add script" title="Add script">+</button>
           </div>
-          <div class="admin-list">${exploitRows || '<p class="admin-empty">No scripts yet.</p>'}</div>
+          <div class="grid grid-exploits">${exploitCards || ""}</div>
+          ${exploitCards ? "" : '<div class="empty-state"><span class="emoji">📜</span><p>No scripts yet — hit + to add one.</p></div>'}
         </div>
 
         <div class="admin-section">
           <div class="admin-section-head">
-            <h2>🛠 Executors</h2>
-            <button class="admin-btn admin-btn-add" data-action="add-executor">+ Add Executor</button>
+            <p class="section-label">🛠 Executors · ${executors.length}</p>
+            <button class="admin-fab" data-action="add-executor" aria-label="Add executor" title="Add executor">+</button>
           </div>
-          <div class="admin-list">${executorRows || '<p class="admin-empty">No executors yet.</p>'}</div>
+          <div class="grid grid-executors">${executorCards || ""}</div>
+          ${executorCards ? "" : '<div class="empty-state"><span class="emoji">🛠</span><p>No executors yet — hit + to add one.</p></div>'}
         </div>
 
         <div class="admin-section">
           <div class="admin-section-head">
-            <h2>🔧 Data</h2>
+            <p class="section-label">🔧 Data</p>
           </div>
           <div class="admin-data-actions">
             <button class="admin-btn admin-btn-secondary" data-action="reset-data">Reset to defaults</button>
@@ -817,13 +836,19 @@
     }
   }
 
-  /* ---------- Admin: event wiring ---------- */
+  /* ---------- Admin: event wiring ----------
+     Bound once on document (not per-render on .admin-view) because the
+     admin modal is appended directly to <body>, outside the .admin-view
+     subtree, so a listener scoped to .admin-view would never see clicks
+     inside the modal. */
+  let adminEventsBound = false;
   function bindAdminEvents() {
-    const view = app.querySelector(".admin-view");
-    if (!view) return;
-    view.addEventListener("click", (e) => {
+    if (adminEventsBound) return;
+    adminEventsBound = true;
+    document.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-action], [data-admin-save]");
       if (!btn) return;
+      if (!btn.closest(".admin-view") && !btn.closest("#adminModal")) return;
       const action = btn.getAttribute("data-action");
       const saveMode = btn.getAttribute("data-admin-save");
 
@@ -907,6 +932,7 @@
     app.innerHTML = html;
     setActiveNav(activeRoute);
     bindViewEvents();
+    bindAdminEvents();
     initMotion(app);
 
     const view = app.querySelector(".view");
@@ -946,7 +972,7 @@
                 <a class="card" href="#/game/${g.id}">
                   <div class="card-img">
                     <span class="img-gradient" style="background:${g.gradient}"></span>
-                    <span class="emoji">${g.emoji}</span>
+                    ${thumbDisplay(g)}
                   </div>
                   <div class="card-body">
                     <span class="card-title">${escapeHtml(g.name)}</span>

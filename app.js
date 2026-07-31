@@ -10,10 +10,10 @@
   const yearEl = document.getElementById("year");
   if (yearEl) yearEl.textContent = new Date().getFullYear();
 
-  const DATA = window.Store.load();
+  const DATA = { games: [], executors: [] };
   // Keep a live reference that the admin panel can mutate + re-render.
-  function refreshData() {
-    const fresh = window.Store.load();
+  async function refreshData() {
+    const fresh = await window.Store.load();
     DATA.games = fresh.games;
     DATA.executors = fresh.executors;
   }
@@ -600,8 +600,8 @@
     return out;
   }
 
-  function saveAndRefresh() {
-    window.Store.save({ games: DATA.games, executors: DATA.executors });
+  async function saveAndRefresh() {
+    await refreshData();
     closeAdminModal();
     render();
   }
@@ -648,12 +648,17 @@
     bindImagePreview(document.getElementById("adminModal"));
   }
 
-  function adminDeleteGame(gameId) {
+  async function adminDeleteGame(gameId) {
     const g = DATA.games.find((x) => x.id === gameId);
     if (!g) return;
     if (!confirm(`Delete "${g.name}" and all its scripts? This cannot be undone.`)) return;
-    DATA.games = DATA.games.filter((x) => x.id !== gameId);
-    saveAndRefresh();
+    try {
+      await window.Store.deleteGame(gameId);
+      await saveAndRefresh();
+      showToast("Game deleted");
+    } catch (e) {
+      showToast("Failed to delete game");
+    }
   }
 
   /* ---------- Admin: Exploits ---------- */
@@ -708,14 +713,19 @@
     if (req) req.setAttribute("data-list", "1");
   }
 
-  function adminDeleteExploit(gameId, exploitId) {
+  async function adminDeleteExploit(gameId, exploitId) {
     const g = DATA.games.find((x) => x.id === gameId);
     if (!g) return;
     const e = (g.exploits || []).find((x) => x.id === exploitId);
     if (!e) return;
     if (!confirm(`Delete "${e.title}"?`)) return;
-    g.exploits = (g.exploits || []).filter((x) => x.id !== exploitId);
-    saveAndRefresh();
+    try {
+      await window.Store.deleteScript(gameId, exploitId);
+      await saveAndRefresh();
+      showToast("Script deleted");
+    } catch (err) {
+      showToast("Failed to delete script");
+    }
   }
 
   /* ---------- Admin: Executors ---------- */
@@ -749,90 +759,108 @@
     if (feat) feat.setAttribute("data-list", "1");
   }
 
-  function adminDeleteExecutor(executorId) {
+  async function adminDeleteExecutor(executorId) {
     const ex = DATA.executors.find((x) => x.id === executorId);
     if (!ex) return;
     if (!confirm(`Delete "${ex.name}"?`)) return;
-    DATA.executors = DATA.executors.filter((x) => x.id !== executorId);
-    saveAndRefresh();
+    try {
+      await window.Store.deleteExecutor(executorId);
+      await saveAndRefresh();
+      showToast("Executor deleted");
+    } catch (e) {
+      showToast("Failed to delete executor");
+    }
   }
 
   /* ---------- Admin: handle save button clicks ---------- */
-  function handleAdminSave(btn) {
+  async function handleAdminSave(btn) {
     const modalBody = document.querySelector(".admin-modal-body");
     const data = collectForm(modalBody);
     const mode = btn.getAttribute("data-admin-save");
 
-    if (mode === "game-new") {
-      if (!data.name) return showToast("Name is required");
-      const id = window.Store.slugify(data.name, DATA.games.map((g) => g.id));
-      DATA.games.push({
-        id, name: data.name, sub: data.sub || "", emoji: "🎮",
-        image: data.image || "", gradient: "linear-gradient(135deg, #1a1a1a, #050505)",
-        exploits: [],
-      });
-      saveAndRefresh();
-      showToast("Game added");
-    } else if (mode === "game") {
-      const g = DATA.games.find((x) => x.id === btn.getAttribute("data-id"));
-      if (!g) return;
-      if (data.name) g.name = data.name;
-      g.sub = data.sub || "";
-      if (data.image) g.image = data.image; else delete g.image;
-      saveAndRefresh();
-      showToast("Game saved");
-    } else if (mode === "exploit-new") {
-      const gameId = data._game;
-      const g = DATA.games.find((x) => x.id === gameId);
-      if (!g) return showToast("Select a game first");
-      if (!data.title) return showToast("Title is required");
-      const id = window.Store.slugify(data.title, (g.exploits || []).map((e) => e.id));
-      g.exploits = g.exploits || [];
-      g.exploits.push({
-        id, title: data.title, emoji: "📜", image: data.image || "",
-        short: data.short || "", description: data.description || "",
-        loadstring: data.loadstring || "", level: data.level || "",
-        verified: !!data.verified, downloads: data.downloads || "—",
-        updated: data.updated || "now", requirements: data.requirements || [],
-      });
-      saveAndRefresh();
-      showToast("Script added");
-    } else if (mode === "exploit") {
-      const g = DATA.games.find((x) => x.id === btn.getAttribute("data-game"));
-      const e = g && (g.exploits || []).find((x) => x.id === btn.getAttribute("data-id"));
-      if (!e) return;
-      if (data.title) e.title = data.title;
-      e.short = data.short || "";
-      e.description = data.description || "";
-      e.loadstring = data.loadstring || "";
-      e.level = data.level || "";
-      e.verified = !!data.verified;
-      e.downloads = data.downloads || "—";
-      e.updated = data.updated || "now";
-      e.requirements = data.requirements || [];
-      if (data.image) e.image = data.image; else delete e.image;
-      saveAndRefresh();
-      showToast("Script saved");
-    } else if (mode === "executor-new") {
-      if (!data.name) return showToast("Name is required");
-      const id = window.Store.slugify(data.name, DATA.executors.map((e) => e.id));
-      DATA.executors.push({
-        id, name: data.name, emoji: "⚡", image: data.image || "",
-        description: data.description || "", download: data.download || "",
-        features: data.features || [],
-      });
-      saveAndRefresh();
-      showToast("Executor added");
-    } else if (mode === "executor") {
-      const ex = DATA.executors.find((x) => x.id === btn.getAttribute("data-id"));
-      if (!ex) return;
-      if (data.name) ex.name = data.name;
-      ex.description = data.description || "";
-      ex.download = data.download || "";
-      ex.features = data.features || [];
-      if (data.image) ex.image = data.image; else delete ex.image;
-      saveAndRefresh();
-      showToast("Executor saved");
+    try {
+      if (mode === "game-new") {
+        if (!data.name) return showToast("Name is required");
+        const id = window.Store.slugify(data.name, DATA.games.map((g) => g.id));
+        await window.Store.insertGame({
+          id, name: data.name, sub: data.sub || "", emoji: "🎮",
+          image: data.image || "", gradient: "linear-gradient(135deg, #1a1a1a, #050505)",
+        });
+        await saveAndRefresh();
+        showToast("Game added");
+      } else if (mode === "game") {
+        const id = btn.getAttribute("data-id");
+        const g = DATA.games.find((x) => x.id === id);
+        if (!g) return;
+        await window.Store.updateGame(id, {
+          name: data.name || g.name,
+          sub: data.sub || "",
+          image: data.image || "",
+        });
+        await saveAndRefresh();
+        showToast("Game saved");
+      } else if (mode === "exploit-new") {
+        const gameId = data._game;
+        const g = DATA.games.find((x) => x.id === gameId);
+        if (!g) return showToast("Select a game first");
+        if (!data.title) return showToast("Title is required");
+        const id = window.Store.slugify(data.title, (g.exploits || []).map((e) => e.id));
+        await window.Store.insertScript({
+          id, game_id: gameId, title: data.title, emoji: "📜", image: data.image || "",
+          short: data.short || "", description: data.description || "",
+          loadstring: data.loadstring || "", level: data.level || null,
+          verified: !!data.verified, downloads: data.downloads || "—",
+          updated: data.updated || "now", requirements: data.requirements || [],
+        });
+        await saveAndRefresh();
+        showToast("Script added");
+      } else if (mode === "exploit") {
+        const gameId = btn.getAttribute("data-game");
+        const id = btn.getAttribute("data-id");
+        const g = DATA.games.find((x) => x.id === gameId);
+        const e = g && (g.exploits || []).find((x) => x.id === id);
+        if (!e) return;
+        await window.Store.updateScript(gameId, id, {
+          title: data.title || e.title,
+          short: data.short || "",
+          description: data.description || "",
+          loadstring: data.loadstring || "",
+          level: data.level || null,
+          verified: !!data.verified,
+          downloads: data.downloads || "—",
+          updated: data.updated || "now",
+          requirements: data.requirements || [],
+          image: data.image || "",
+        });
+        await saveAndRefresh();
+        showToast("Script saved");
+      } else if (mode === "executor-new") {
+        if (!data.name) return showToast("Name is required");
+        const id = window.Store.slugify(data.name, DATA.executors.map((e) => e.id));
+        await window.Store.insertExecutor({
+          id, name: data.name, emoji: "⚡", image: data.image || "",
+          description: data.description || "", download: data.download || "",
+          features: data.features || [],
+        });
+        await saveAndRefresh();
+        showToast("Executor added");
+      } else if (mode === "executor") {
+        const id = btn.getAttribute("data-id");
+        const ex = DATA.executors.find((x) => x.id === id);
+        if (!ex) return;
+        await window.Store.updateExecutor(id, {
+          name: data.name || ex.name,
+          description: data.description || "",
+          download: data.download || "",
+          features: data.features || [],
+          image: data.image || "",
+        });
+        await saveAndRefresh();
+        showToast("Executor saved");
+      }
+    } catch (err) {
+      console.error("Admin save failed:", err);
+      showToast("Save failed — check your connection and try again");
     }
   }
 
@@ -867,12 +895,14 @@
       else if (action === "edit-executor") adminEditExecutor(id);
       else if (action === "delete-executor") adminDeleteExecutor(id);
       else if (action === "reset-data") {
-        if (confirm("Reset ALL data back to defaults? This deletes your changes.")) {
-          const fresh = window.Store.reset();
-          DATA.games = fresh.games;
-          DATA.executors = fresh.executors;
-          render();
-          showToast("Data reset to defaults");
+        if (confirm("Reset ALL data back to defaults? This deletes everyone's changes.")) {
+          showToast("Resetting…");
+          window.Store.reset().then((fresh) => {
+            DATA.games = fresh.games;
+            DATA.executors = fresh.executors;
+            render();
+            showToast("Data reset to defaults");
+          }).catch(() => showToast("Reset failed — check your connection"));
         }
       }
     });
@@ -1270,11 +1300,18 @@
   // Start visible
   navEl.classList.add("visible");
 
-  if (location.hash === "#discord" || location.hash === "#/discord") {
-    history.replaceState(null, "", location.pathname + location.search);
-    render();
-    setTimeout(openDiscordModal, 100);
-  } else {
-    render();
+  /* ---------- Boot: fetch from Supabase, then render ---------- */
+  app.innerHTML = `<section class="view"><div class="empty-state"><span class="emoji">⏳</span><p>Loading SCRIPTEXER…</p></div></section>`;
+
+  async function boot() {
+    await refreshData();
+    if (location.hash === "#discord" || location.hash === "#/discord") {
+      history.replaceState(null, "", location.pathname + location.search);
+      render();
+      setTimeout(openDiscordModal, 100);
+    } else {
+      render();
+    }
   }
+  boot();
 })();

@@ -317,49 +317,109 @@ const DATA = {
 window.DATA = DATA;
 
 /* ============================================================
-   Store — localStorage persistence layer
-   The main site reads from Store.get(); the admin panel writes
-   to Store. Falls back to the default DATA above on first load.
+   Store — Supabase persistence layer
+   The main site and the admin panel both read/write straight to
+   Supabase, so games/scripts/executors are shared across every
+   visitor and device instead of being stuck in one browser.
    ============================================================ */
-const STORE_KEY = "scriptexer_data_v1";
+const SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzY2F6dHR2aGd3YXF4a2RwaHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MzI0NTYsImV4cCI6MjEwMTEwODQ1Nn0.WWKLNM6ZQZKF2DVne0diOaT3ZB7apbbbuk1lTH-b4L8";
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const Store = {
-  /** Load data from localStorage, merging with defaults. */
-  load() {
+  /** Load games (with their scripts nested as .exploits) and executors from Supabase. */
+  async load() {
     try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) {
-        // First run — seed with defaults and persist.
-        const seed = { games: DATA.games, executors: DATA.executors };
-        localStorage.setItem(STORE_KEY, JSON.stringify(seed));
-        return seed;
+      const [gamesRes, scriptsRes, executorsRes] = await Promise.all([
+        sb.from("games").select("*").order("created_at", { ascending: true }),
+        sb.from("scripts").select("*").order("created_at", { ascending: true }),
+        sb.from("executors").select("*").order("created_at", { ascending: true }),
+      ]);
+      if (gamesRes.error) throw gamesRes.error;
+      if (scriptsRes.error) throw scriptsRes.error;
+      if (executorsRes.error) throw executorsRes.error;
+
+      // First run — tables exist but are empty. Seed with the built-in defaults.
+      if (gamesRes.data.length === 0 && executorsRes.data.length === 0) {
+        await this.seedDefaults();
+        return this.load();
       }
-      const parsed = JSON.parse(raw);
-      return {
-        games: Array.isArray(parsed.games) ? parsed.games : DATA.games,
-        executors: Array.isArray(parsed.executors) ? parsed.executors : DATA.executors,
-      };
+
+      const games = gamesRes.data.map((g) => ({
+        ...g,
+        exploits: scriptsRes.data.filter((s) => s.game_id === g.id),
+      }));
+      return { games, executors: executorsRes.data };
     } catch (e) {
-      console.warn("Store.load failed, using defaults:", e);
+      console.error("Store.load failed, falling back to built-in defaults:", e);
       return { games: DATA.games, executors: DATA.executors };
     }
   },
 
-  /** Persist the full data set. */
-  save(data) {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(data));
-      return true;
-    } catch (e) {
-      console.error("Store.save failed:", e);
-      return false;
-    }
+  /** One-time seed of the empty Supabase tables from the bundled defaults. */
+  async seedDefaults() {
+    const gamesToInsert = DATA.games.map((g) => {
+      const { exploits, ...rest } = g;
+      return rest;
+    });
+    const scriptsToInsert = DATA.games.flatMap((g) =>
+      (g.exploits || []).map((e) => ({ ...e, game_id: g.id }))
+    );
+    await sb.from("games").insert(gamesToInsert);
+    await sb.from("scripts").insert(scriptsToInsert);
+    await sb.from("executors").insert(DATA.executors);
   },
 
-  /** Reset everything back to defaults. */
-  reset() {
-    localStorage.removeItem(STORE_KEY);
+  /** Wipe everything and reseed from defaults. */
+  async reset() {
+    await sb.from("scripts").delete().neq("game_id", "__none__");
+    await sb.from("games").delete().neq("id", "__none__");
+    await sb.from("executors").delete().neq("id", "__none__");
+    await this.seedDefaults();
     return this.load();
+  },
+
+  /* ---------- Games ---------- */
+  async insertGame(game) {
+    const { error } = await sb.from("games").insert(game);
+    if (error) throw error;
+  },
+  async updateGame(id, patch) {
+    const { error } = await sb.from("games").update(patch).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteGame(id) {
+    const { error } = await sb.from("games").delete().eq("id", id);
+    if (error) throw error;
+  },
+
+  /* ---------- Scripts ---------- */
+  async insertScript(script) {
+    const { error } = await sb.from("scripts").insert(script);
+    if (error) throw error;
+  },
+  async updateScript(gameId, id, patch) {
+    const { error } = await sb.from("scripts").update(patch).eq("game_id", gameId).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteScript(gameId, id) {
+    const { error } = await sb.from("scripts").delete().eq("game_id", gameId).eq("id", id);
+    if (error) throw error;
+  },
+
+  /* ---------- Executors ---------- */
+  async insertExecutor(executor) {
+    const { error } = await sb.from("executors").insert(executor);
+    if (error) throw error;
+  },
+  async updateExecutor(id, patch) {
+    const { error } = await sb.from("executors").update(patch).eq("id", id);
+    if (error) throw error;
+  },
+  async deleteExecutor(id) {
+    const { error } = await sb.from("executors").delete().eq("id", id);
+    if (error) throw error;
   },
 
   /** Generate a unique kebab-case id from a name. */

@@ -359,16 +359,31 @@ const Store = {
 
   /** One-time seed of the empty Supabase tables from the bundled defaults. */
   async seedDefaults() {
-    const gamesToInsert = DATA.games.map((g) => {
-      const { exploits, ...rest } = g;
-      return rest;
-    });
+    const gamesToInsert = DATA.games.map((g) => ({
+      id: g.id, name: g.name, sub: g.sub || "", emoji: g.emoji || "🎮",
+      image: g.image || "", gradient: g.gradient || "",
+    }));
     const scriptsToInsert = DATA.games.flatMap((g) =>
-      (g.exploits || []).map((e) => ({ ...e, game_id: g.id }))
+      (g.exploits || []).map((e) => ({
+        id: e.id, game_id: g.id, title: e.title, emoji: e.emoji || "📜",
+        image: e.image || "", short: e.short || "", description: e.description || "",
+        loadstring: e.loadstring || "", level: e.level || null,
+        verified: !!e.verified, downloads: e.downloads || "—",
+        updated: e.updated || "now", requirements: e.requirements || [],
+      }))
     );
-    await sb.from("games").insert(gamesToInsert);
-    await sb.from("scripts").insert(scriptsToInsert);
-    await sb.from("executors").insert(DATA.executors);
+    const executorsToInsert = DATA.executors.map((ex) => ({
+      id: ex.id, name: ex.name, emoji: ex.emoji || "⚡", image: ex.image || "",
+      gradient: ex.gradient || "", description: ex.description || "",
+      download: ex.download || "", features: ex.features || [],
+    }));
+
+    const gamesRes = await sb.from("games").insert(gamesToInsert);
+    if (gamesRes.error) throw gamesRes.error;
+    const scriptsRes = await sb.from("scripts").insert(scriptsToInsert);
+    if (scriptsRes.error) throw scriptsRes.error;
+    const executorsRes = await sb.from("executors").insert(executorsToInsert);
+    if (executorsRes.error) throw executorsRes.error;
   },
 
   /** Wipe everything and reseed from defaults. */

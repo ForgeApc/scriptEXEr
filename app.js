@@ -190,7 +190,7 @@
         <div class="page-hero">
           <span class="eyebrow">SCRIPTEXER · Library</span>
           <h1>Find the perfect script</h1>
-          <p>Search thousands of Roblox exploits by game name. Copy a loadstring and you're ready to run.</p>
+          <p>Search thousands of Roblox scripts by game name. Copy a loadstring and you're ready to run.</p>
         </div>
         <div class="search-wrap">
           <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -211,9 +211,9 @@
            <svg class="game-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
            <input id="exploit-search" class="game-search-input" type="text" placeholder="Search scripts in ${escapeHtml(game.name)}…" autocomplete="off" />
          </div>
-         <p class="section-label" id="exploit-count">Available exploits · ${game.exploits.length}</p>
+         <p class="section-label" id="exploit-count">Available scripts · ${game.exploits.length}</p>
          <div class="grid grid-exploits" id="exploits-grid">${cardsHtmlStatic(game, game.exploits)}</div>`
-      : `<div class="empty-state"><span class="emoji">📦</span><p>No exploits available for this game yet.</p></div>`;
+      : `<div class="empty-state"><span class="emoji">📦</span><p>No scripts available for this game yet.</p></div>`;
 
     return `
       <section class="view">
@@ -1000,7 +1000,7 @@
             grid.outerHTML = `<div class="grid grid-exploits" id="exploits-grid">${cardsHtmlStatic(game, matches)}</div>`;
           }
           if (countLabel) {
-            countLabel.textContent = `${q ? "Results" : "Available exploits"} · ${matches.length}`;
+            countLabel.textContent = `${q ? "Results" : "Available scripts"} · ${matches.length}`;
           }
           initMotion(app);
         }, 140);

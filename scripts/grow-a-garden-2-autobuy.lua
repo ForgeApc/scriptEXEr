@@ -159,34 +159,26 @@ end
 
 local BuyInterval = 0.5
 
--- Live proof-of-activity state, split into two separate counters so
--- you can tell "nothing is selected" apart from "things are selected
--- but canAfford is blocking every single one" — those looked
--- identical when there was only one counter that incremented after
--- the afford check.
-local BuyConsideredCount = 0 -- selected items the loop checked, regardless of affordability
-local BuyFiredCount = 0 -- selected items that passed canAfford and got a Fire() call
+-- Live proof-of-activity state.
+local BuyFiredCount = 0 -- selected items that got a Fire() call
 local BuyLastFired = ""
 
 -- Fires the purchase remote for every selected item on every pass,
--- regardless of whether it currently shows in stock — some games only
--- update the stock Value on a delay after a restock, so waiting for
--- item.Value > 0 could miss a restock window entirely. This spams the
--- request instead and lets the server decide whether it goes through.
+-- unconditionally — regardless of stock status or whether you can
+-- currently afford it. The server decides whether the purchase goes
+-- through; this just keeps asking. (canAfford still exists and is
+-- used elsewhere, but is intentionally NOT checked here anymore.)
 local function runBuyLoop(stockFolder, remote, category)
 	task.spawn(function()
 		while task.wait(BuyInterval) do
 			for _, item in pairs(stockFolder:GetChildren()) do
 				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
-					BuyConsideredCount += 1
-					if canAfford(item.Name) then
-						BuyFiredCount += 1
-						BuyLastFired = category .. " · " .. item.Name
-						print(string.format("[SCRIPTEXER] Buy fired #%d: %s (%s)", BuyFiredCount, item.Name, category))
-						pcall(function()
-							remote:Fire(item.Name)
-						end)
-					end
+					BuyFiredCount += 1
+					BuyLastFired = category .. " · " .. item.Name
+					print(string.format("[SCRIPTEXER] Buy fired #%d: %s (%s)", BuyFiredCount, item.Name, category))
+					pcall(function()
+						remote:Fire(item.Name)
+					end)
 				end
 			end
 		end
@@ -707,19 +699,18 @@ createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(
 	BuyInterval = v
 end)
 
--- Live proof of exactly what stage the loop is at: how many items are
--- selected right now, how many times it's checked one of them
--- (Considered), and how many actually passed canAfford and got fired
--- (Fired). If Selected > 0 but Considered stays 0, the loop itself
--- isn't running. If Considered climbs but Fired stays 0, canAfford is
--- the blocker (almost always because playerdata never resolved — check
--- the Stats tab status for that).
+-- Live proof the loop is actually running: Selected is counted
+-- directly from your toggles (independent of whether the loop has run
+-- yet), Fired is how many purchase requests have actually gone out.
+-- If Selected > 0 but Fired stays 0, the loop itself isn't running —
+-- that's now the only remaining failure mode here since firing no
+-- longer depends on canAfford.
 local buyStatusLabel = Instance.new("TextLabel")
 buyStatusLabel.BackgroundTransparency = 1
 buyStatusLabel.Position = UDim2.new(0, 16, 0, 146)
 buyStatusLabel.Size = UDim2.new(1, -32, 0, 16)
 buyStatusLabel.Font = Enum.Font.Gotham
-buyStatusLabel.Text = "Selected: 0 · Considered: 0 · Fired: 0"
+buyStatusLabel.Text = "Selected: 0 · Fired: 0"
 buyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 buyStatusLabel.TextSize = 11
 buyStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -729,15 +720,12 @@ buyStatusLabel.Parent = buyPage
 task.spawn(function()
 	while task.wait(0.2) do
 		local selectedCount = countSelected()
-		local text = string.format("Selected: %d · Considered: %d · Fired: %d", selectedCount, BuyConsideredCount, BuyFiredCount)
+		local text = string.format("Selected: %d · Fired: %d", selectedCount, BuyFiredCount)
 		if BuyFiredCount > 0 then
 			text = text .. " · last: " .. BuyLastFired
 			buyStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
-		elseif BuyConsideredCount > 0 then
-			text = text .. " (canAfford blocking every one — check Stats tab status)"
-			buyStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		elseif selectedCount > 0 then
-			text = text .. " (loop hasn't checked yet)"
+			text = text .. " (loop hasn't fired yet — should within " .. string.format("%.2f", BuyInterval) .. "s)"
 			buyStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
 		else
 			buyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)

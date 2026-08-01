@@ -355,20 +355,45 @@ local function createSlider(parent, y, labelText, min, max, default, unit, onCha
 
 	local label = Instance.new("TextLabel")
 	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 0, 16)
+	label.Size = UDim2.new(1, -56, 0, 16)
 	label.Font = Enum.Font.Gotham
 	label.TextColor3 = Color3.fromRGB(200, 200, 205)
 	label.TextSize = 12
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = row
 
+	-- Type an exact value directly instead of dragging.
+	local valueBox = Instance.new("TextBox")
+	valueBox.Position = UDim2.new(1, -50, 0, -1)
+	valueBox.Size = UDim2.new(0, 50, 0, 18)
+	valueBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	valueBox.BackgroundTransparency = 0.9
+	valueBox.Font = Enum.Font.GothamBold
+	valueBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+	valueBox.TextSize = 11
+	valueBox.ClearTextOnFocus = false
+	valueBox.Parent = row
+
+	local valueBoxCorner = Instance.new("UICorner")
+	valueBoxCorner.CornerRadius = UDim.new(0, 6)
+	valueBoxCorner.Parent = valueBox
+
+	-- Invisible, larger hit-zone around the thin visual track — 6px is
+	-- fine for a mouse cursor but far too thin to reliably grab and
+	-- drag with a finger on a touchscreen.
+	local hitZone = Instance.new("Frame")
+	hitZone.Active = true
+	hitZone.BackgroundTransparency = 1
+	hitZone.Position = UDim2.new(0, 0, 0, 16)
+	hitZone.Size = UDim2.new(1, 0, 0, 24)
+	hitZone.Parent = row
+
 	local track = Instance.new("Frame")
-	track.Active = true
-	track.Position = UDim2.new(0, 0, 0, 24)
+	track.Position = UDim2.new(0, 0, 0.5, -3)
 	track.Size = UDim2.new(1, 0, 0, 6)
 	track.BackgroundColor3 = Color3.fromRGB(50, 50, 54)
 	track.BorderSizePixel = 0
-	track.Parent = row
+	track.Parent = hitZone
 
 	local trackCorner = Instance.new("UICorner")
 	trackCorner.CornerRadius = UDim.new(1, 0)
@@ -397,33 +422,61 @@ local function createSlider(parent, y, labelText, min, max, default, unit, onCha
 	knobCorner.CornerRadius = UDim.new(1, 0)
 	knobCorner.Parent = knob
 
+	local currentValue = default
+	local editingBox = false
+
 	local function setFromAlpha(alpha)
 		alpha = math.clamp(alpha, 0, 1)
-		local value = min + (max - min) * alpha
+		currentValue = min + (max - min) * alpha
 		fill.Size = UDim2.new(alpha, 0, 1, 0)
 		knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-		label.Text = string.format("%s: %.3f%s", labelText, value, unit)
-		onChange(value)
+		label.Text = string.format("%s (%s):", labelText, unit)
+		if not editingBox then
+			valueBox.Text = string.format("%.3f", currentValue)
+		end
+		onChange(currentValue)
 	end
 
 	local dragging = false
-	local function alphaFromInput(input)
-		return (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+	local function alphaFromX(x)
+		return (x - hitZone.AbsolutePosition.X) / hitZone.AbsoluteSize.X
 	end
-	track.InputBegan:Connect(function(input)
+
+	hitZone.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
-			setFromAlpha(alphaFromInput(input))
+			setFromAlpha(alphaFromX(input.Position.X))
 		end
 	end)
-	track.InputEnded:Connect(function(input)
+	hitZone.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
 		end
 	end)
+	-- Two independent paths for drag continuation: InputChanged covers
+	-- mouse movement, TouchMoved is Roblox's dedicated touch-drag event
+	-- and is the more reliable of the two specifically for fingers.
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			setFromAlpha(alphaFromInput(input))
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			setFromAlpha(alphaFromX(input.Position.X))
+		end
+	end)
+	UserInputService.TouchMoved:Connect(function(touch)
+		if dragging then
+			setFromAlpha(alphaFromX(touch.Position.X))
+		end
+	end)
+
+	valueBox.Focused:Connect(function()
+		editingBox = true
+	end)
+	valueBox.FocusLost:Connect(function()
+		editingBox = false
+		local num = tonumber(valueBox.Text)
+		if num then
+			setFromAlpha((math.clamp(num, min, max) - min) / (max - min))
+		else
+			valueBox.Text = string.format("%.3f", currentValue)
 		end
 	end)
 

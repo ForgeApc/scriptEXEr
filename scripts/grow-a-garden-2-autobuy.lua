@@ -30,6 +30,7 @@ local CratesStock = ReplicatedStorage.StockValues.CrateShop.Items
 
 local CollectFruit = Networking.Garden.CollectFruit
 local SellAll = Networking.NPCS.SellAll
+local PlantSeed = Networking.Plant.PlantSeed
 
 -- Item prices, collected opportunistically while searching for the
 -- Sheckles balance below. Only used by canAfford(), which the buy
@@ -436,6 +437,82 @@ task.spawn(function()
 end)
 
 --========================================================
+-- PLANT — fires Networking.Plant.PlantSeed for each selected seed.
+--
+-- The remote's argument ORDER isn't discoverable from the module dump
+-- (its Writes serializers are opaque), and guessing wrong would fail
+-- silently. So instead of hardcoding a guess, the first plant attempt
+-- tries position-first, and if that errors, seed-name-first — then
+-- remembers whichever succeeded for the rest of the session. The
+-- game's typed serializers reject mismatched argument types, which is
+-- what makes this detectable rather than a coin flip.
+--========================================================
+local PlantEnabled = false
+local PlantInterval = 0.5
+local PlantSelected = {} -- seed name -> true
+local PlantArgOrder = nil -- nil = not yet determined, then "pos_first" / "name_first"
+local PlantFiredCount = 0
+local PlantLastFired = ""
+
+local function isPlantSelected(name)
+	return PlantSelected[name] == true
+end
+
+local function countPlantSelected()
+	local n = 0
+	for _, on in pairs(PlantSelected) do
+		if on then n += 1 end
+	end
+	return n
+end
+
+local function firePlant(seedName, position)
+	if PlantArgOrder == "pos_first" then
+		return pcall(function() PlantSeed:Fire(position, seedName) end)
+	elseif PlantArgOrder == "name_first" then
+		return pcall(function() PlantSeed:Fire(seedName, position) end)
+	end
+
+	-- Order still unknown — probe both, keep whichever the serializer accepts.
+	if pcall(function() PlantSeed:Fire(position, seedName) end) then
+		PlantArgOrder = "pos_first"
+		return true
+	end
+	if pcall(function() PlantSeed:Fire(seedName, position) end) then
+		PlantArgOrder = "name_first"
+		return true
+	end
+	return false
+end
+
+-- Plants at your character's current position, which is how planting
+-- works manually — stand on your plot and it fills in around you.
+local function getPlantPosition()
+	local character = Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root then return root.Position end
+	return nil
+end
+
+task.spawn(function()
+	while task.wait(PlantInterval) do
+		if PlantEnabled then
+			local position = getPlantPosition()
+			if position then
+				for seedName, on in pairs(PlantSelected) do
+					if on then
+						if firePlant(seedName, position) then
+							PlantFiredCount += 1
+							PlantLastFired = seedName
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+--========================================================
 -- SELL — fires the game's own "sell everything" remote on a delay.
 --========================================================
 local SellEnabled = false
@@ -481,7 +558,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Harvest = 130, Sell = 90, Stats = 232 }
+local PAGE_HEIGHTS = { Buy = 398, Plant = 330, Harvest = 130, Sell = 90, Stats = 232 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -806,7 +883,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -829,8 +906,9 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	local btn = pillButton(topTabBar, key, 61)
-	btn.TextSize = 11
+	-- 5 tabs across a 268px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 50)
+	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
 		setActivePage(key)
@@ -1134,6 +1212,165 @@ end
 
 paintSubTabs()
 buildList(activeSubTab)
+
+--========================================================
+-- PLANT page
+--========================================================
+local plantPage = pages.Plant
+
+createToggleRow(plantPage, 0, "Enable Auto Plant", PlantEnabled, function(state)
+	PlantEnabled = state
+end)
+
+createSlider(plantPage, 32, "Plant delay", 0.001, 10, PlantInterval, "s", function(v)
+	PlantInterval = v
+end)
+
+local plantStatusLabel = Instance.new("TextLabel")
+plantStatusLabel.BackgroundTransparency = 1
+plantStatusLabel.Position = UDim2.new(0, 16, 0, 74)
+plantStatusLabel.Size = UDim2.new(1, -32, 0, 28)
+plantStatusLabel.Font = Enum.Font.Gotham
+plantStatusLabel.Text = "Stand on your plot — seeds plant at your position."
+plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+plantStatusLabel.TextSize = 11
+plantStatusLabel.TextWrapped = true
+plantStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+plantStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+plantStatusLabel.Parent = plantPage
+
+task.spawn(function()
+	while task.wait(0.2) do
+		local selectedCount = countPlantSelected()
+		if PlantFiredCount > 0 then
+			plantStatusLabel.Text = string.format(
+				"Selected: %d · Planted: %d · last: %s (%s)",
+				selectedCount, PlantFiredCount, PlantLastFired, PlantArgOrder or "?"
+			)
+			plantStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
+		elseif PlantEnabled and selectedCount > 0 then
+			plantStatusLabel.Text = "Trying to plant… stand on your plot with seeds in inventory."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		else
+			plantStatusLabel.Text = "Stand on your plot — seeds plant at your position."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+		end
+	end
+end)
+
+local plantBulkRow = Instance.new("Frame")
+plantBulkRow.BackgroundTransparency = 1
+plantBulkRow.Position = UDim2.new(0, 16, 0, 104)
+plantBulkRow.Size = UDim2.new(1, -32, 0, 26)
+plantBulkRow.Parent = plantPage
+
+local plantBulkLayout = Instance.new("UIListLayout")
+plantBulkLayout.FillDirection = Enum.FillDirection.Horizontal
+plantBulkLayout.Padding = UDim.new(0, 8)
+plantBulkLayout.Parent = plantBulkRow
+
+local plantAllBtn = pillButton(plantBulkRow, "Select All", 90)
+local plantNoneBtn = pillButton(plantBulkRow, "None", 90)
+
+local plantList = Instance.new("ScrollingFrame")
+plantList.BackgroundTransparency = 1
+plantList.Position = UDim2.new(0, 16, 0, 138)
+plantList.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Plant - 138 - 8)
+plantList.CanvasSize = UDim2.new(0, 0, 0, 0)
+plantList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+plantList.ScrollBarThickness = 3
+plantList.ScrollBarImageTransparency = 0.4
+plantList.BorderSizePixel = 0
+plantList.Parent = plantPage
+
+local plantListLayout = Instance.new("UIListLayout")
+plantListLayout.Padding = UDim.new(0, 4)
+plantListLayout.Parent = plantList
+
+local plantRowEntries = {}
+
+do
+	-- Seed names come from the shop's stock folder, same source the Buy
+	-- tab uses — it's the full catalog regardless of what you own, and
+	-- the server rejects planting anything you don't have, consistent
+	-- with how Buy fires unconditionally and lets the server decide.
+	local names = {}
+	for _, item in ipairs(SeedsStock:GetChildren()) do
+		table.insert(names, item.Name)
+	end
+	table.sort(names)
+
+	for _, name in ipairs(names) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 28)
+		row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		row.BackgroundTransparency = 0.93
+		row.Parent = plantList
+
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 8)
+		rowCorner.Parent = row
+
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(1, -46, 1, 0)
+		label.Font = Enum.Font.Gotham
+		label.Text = name
+		label.TextColor3 = Color3.fromRGB(230, 230, 235)
+		label.TextSize = 12
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.Parent = row
+
+		local toggle = Instance.new("TextButton")
+		toggle.Position = UDim2.new(1, -34, 0.5, -9)
+		toggle.Size = UDim2.new(0, 26, 0, 18)
+		toggle.AutoButtonColor = false
+		toggle.Text = ""
+		toggle.Parent = row
+
+		local toggleCorner = Instance.new("UICorner")
+		toggleCorner.CornerRadius = UDim.new(1, 0)
+		toggleCorner.Parent = toggle
+
+		local knob = Instance.new("Frame")
+		knob.Size = UDim2.new(0, 14, 0, 14)
+		knob.Position = UDim2.new(0, 2, 0.5, -7)
+		knob.Parent = toggle
+		local knobCorner = Instance.new("UICorner")
+		knobCorner.CornerRadius = UDim.new(1, 0)
+		knobCorner.Parent = knob
+
+		local function paint()
+			local on = isPlantSelected(name)
+			toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
+			knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+			knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+		end
+		paint()
+
+		toggle.MouseButton1Click:Connect(function()
+			PlantSelected[name] = not isPlantSelected(name)
+			paint()
+		end)
+
+		table.insert(plantRowEntries, { name = name, paint = paint })
+	end
+end
+
+plantAllBtn.MouseButton1Click:Connect(function()
+	for _, entry in ipairs(plantRowEntries) do
+		PlantSelected[entry.name] = true
+		entry.paint()
+	end
+end)
+plantNoneBtn.MouseButton1Click:Connect(function()
+	for _, entry in ipairs(plantRowEntries) do
+		PlantSelected[entry.name] = false
+		entry.paint()
+	end
+end)
 
 --========================================================
 -- HARVEST page

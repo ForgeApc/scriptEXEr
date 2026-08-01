@@ -19,6 +19,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
 local Networking = require(ReplicatedStorage.SharedModules.Networking)
 
@@ -370,17 +371,44 @@ end
 -- HARVEST — finds your plot, harvests ripe fruit first, then
 -- attempts still-growing ones too.
 --========================================================
+-- Finding your plot.
+--
+-- This previously did WaitForChild("Gardens") with no timeout and
+-- stopped searching once it found a plot. Both broke on other worlds:
+-- a world without a folder literally named "Gardens" made it yield
+-- forever (killing harvest AND random-mode planting with no error),
+-- and travelling to another world left it pointing at the old world's
+-- plot because the search had already exited.
+--
+-- Now it scans any Workspace container for a plot attributed to you,
+-- and keeps re-checking so world travel is picked up.
 local OwnerPlot = nil
-task.spawn(function()
-	local gardens = game.Workspace:WaitForChild("Gardens")
-	while not OwnerPlot do
-		task.wait(0.1)
-		for _, plot in pairs(gardens:GetChildren()) do
-			if plot:GetAttribute("Owner") == Players.LocalPlayer.Name then
-				OwnerPlot = plot
-				break
+
+local function findOwnerPlot()
+	local myName = Players.LocalPlayer.Name
+	for _, container in ipairs(Workspace:GetChildren()) do
+		if container:IsA("Folder") or container:IsA("Model") then
+			local ok, children = pcall(function() return container:GetChildren() end)
+			if ok then
+				for _, plot in ipairs(children) do
+					if plot:GetAttribute("Owner") == myName then
+						return plot
+					end
+				end
 			end
 		end
+	end
+	return nil
+end
+
+task.spawn(function()
+	while true do
+		-- Re-resolve if we've never found one, or if the one we had has
+		-- been unparented (which is what happens on world travel).
+		if not OwnerPlot or not OwnerPlot.Parent then
+			OwnerPlot = findOwnerPlot()
+		end
+		task.wait(OwnerPlot and 2 or 0.25)
 	end
 end)
 
@@ -469,21 +497,47 @@ local function countPlantSelected()
 	return n
 end
 
-local function firePlant(seedName, position)
-	if PlantArgOrder == "pos_first" then
+-- Ground truth for "did a plant actually happen": the game tells the
+-- client via Garden.PlantAdded. Without this, the counter only ever
+-- proved we *sent* something — a fired request and a successful plant
+-- looked identical, which is exactly why "it does not plant" was
+-- invisible in the UI.
+local PlantConfirmedCount = 0
+pcall(function()
+	Networking.Garden.PlantAdded.OnClientEvent:Connect(function()
+		PlantConfirmedCount += 1
+	end)
+end)
+
+local function fireWithOrder(order, seedName, position)
+	if order == "pos_first" then
 		return pcall(function() PlantSeed:Fire(position, seedName) end)
-	elseif PlantArgOrder == "name_first" then
-		return pcall(function() PlantSeed:Fire(seedName, position) end)
+	end
+	return pcall(function() PlantSeed:Fire(seedName, position) end)
+end
+
+local function firePlant(seedName, position)
+	if PlantArgOrder then
+		return fireWithOrder(PlantArgOrder, seedName, position)
 	end
 
-	-- Order still unknown — probe both, keep whichever the serializer accepts.
-	if pcall(function() PlantSeed:Fire(position, seedName) end) then
-		PlantArgOrder = "pos_first"
-		return true
-	end
-	if pcall(function() PlantSeed:Fire(seedName, position) end) then
-		PlantArgOrder = "name_first"
-		return true
+	-- Order still unknown. pcall success alone is NOT proof the order
+	-- was right — the remote may accept mismatched arguments happily
+	-- and simply do nothing server-side, which would have locked in a
+	-- silently broken order forever. So each candidate is confirmed
+	-- against PlantAdded before being committed to.
+	for _, order in ipairs({ "pos_first", "name_first" }) do
+		local before = PlantConfirmedCount
+		if fireWithOrder(order, seedName, position) then
+			local deadline = tick() + 1
+			while tick() < deadline do
+				if PlantConfirmedCount > before then
+					PlantArgOrder = order
+					return true
+				end
+				task.wait(0.05)
+			end
+		end
 	end
 	return false
 end
@@ -576,7 +630,6 @@ end)
 -- ever target things that are genuinely pick-up-able, and it needs no
 -- guesswork about which folder drops live in.
 --========================================================
-local Workspace = game:GetService("Workspace")
 
 local CollectEnabled = false
 local CollectEverything = true
@@ -1489,12 +1542,20 @@ plantStatusLabel.Parent = plantPage
 task.spawn(function()
 	while task.wait(0.2) do
 		local selectedCount = countPlantSelected()
-		if PlantFiredCount > 0 then
+		if PlantConfirmedCount > 0 then
 			plantStatusLabel.Text = string.format(
-				"Selected: %d · Planted: %d · last: %s (%s)",
-				selectedCount, PlantFiredCount, PlantLastFired, PlantArgOrder or "?"
+				"Planted: %d · sent: %d · last: %s (%s)",
+				PlantConfirmedCount, PlantFiredCount, PlantLastFired, PlantArgOrder or "?"
 			)
 			plantStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
+		elseif PlantFiredCount > 0 then
+			-- Requests are going out but the game never reported a plant:
+			-- wrong spot, no seeds, or this world rejects it.
+			plantStatusLabel.Text = string.format(
+				"Sent %d requests, none planted — check you're on plantable ground with those seeds.",
+				PlantFiredCount
+			)
+			plantStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		elseif PlantMode == "fixed" and not PlantFixedPosition then
 			plantStatusLabel.Text = "No fixed spot set — tap the button above to pin one."
 			plantStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)

@@ -40,9 +40,10 @@
   const LOADER_SCRIPT = `--[[
   SCRIPTEXER — Universal Loader
   Detects the Roblox game you're currently in (via game.PlaceId), shows
-  a small clean HUD in the top-right corner, and runs the best matching
-  script from the SCRIPTEXER catalog. A Switch button cycles through
-  every script registered for that game, stopping the current one first.
+  a small clean glass HUD in the top-right corner, and runs the best
+  matching script from the SCRIPTEXER catalog. Expand the panel to see
+  every script registered for that game and switch between them —
+  switching stops whichever one is currently running first.
 
   Every script's code is fetched live from the SCRIPTEXER database each
   time you launch or switch — nothing is ever bundled into this loader.
@@ -88,7 +89,7 @@ local function parseDownloads(s)
 end
 
 --========================================================
--- UI — minimal dark HUD, top-right corner, draggable
+-- UI — glass HUD, top-right corner, draggable
 --========================================================
 local gui = Instance.new("ScreenGui")
 gui.Name = "ScriptexerLoaderUI"
@@ -102,14 +103,19 @@ gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 -- would blur your view of the game constantly, which defeats the
 -- point of an auto-farm/ESP HUD. The glass look here comes entirely
 -- from translucency + a gradient sheen + a bright rim edge instead.
+local COMPACT_HEIGHT = 104
+local ROW_HEIGHT = 30
+local MAX_VISIBLE_ROWS = 4
+
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
-frame.Size = UDim2.new(0, 270, 0, 104)
+frame.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT)
 frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 frame.BackgroundTransparency = 0.86
 frame.BorderSizePixel = 0
+frame.ClipsDescendants = false
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
@@ -177,43 +183,89 @@ status.TextYAlignment = Enum.TextYAlignment.Top
 status.ZIndex = 2
 status.Parent = frame
 
-local switchBtn = Instance.new("TextButton")
-switchBtn.Name = "SwitchButton"
-switchBtn.Position = UDim2.new(0, 16, 1, -38)
-switchBtn.Size = UDim2.new(1, -32, 0, 26)
-switchBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-switchBtn.BackgroundTransparency = 0.82
-switchBtn.AutoButtonColor = false
-switchBtn.Font = Enum.Font.GothamBold
-switchBtn.Text = "Switch Script"
-switchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-switchBtn.TextSize = 12
-switchBtn.Visible = false
-switchBtn.ZIndex = 2
-switchBtn.Parent = frame
+-- Toggle row: expands/collapses the script list below it.
+local scriptsToggle = Instance.new("TextButton")
+scriptsToggle.Name = "ScriptsToggle"
+scriptsToggle.Position = UDim2.new(0, 16, 1, -38)
+scriptsToggle.Size = UDim2.new(1, -32, 0, 26)
+scriptsToggle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+scriptsToggle.BackgroundTransparency = 0.82
+scriptsToggle.AutoButtonColor = false
+scriptsToggle.Font = Enum.Font.GothamBold
+scriptsToggle.Text = "Scripts ▾"
+scriptsToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+scriptsToggle.TextSize = 12
+scriptsToggle.Visible = false
+scriptsToggle.ZIndex = 2
+scriptsToggle.Parent = frame
 
-local switchCorner = Instance.new("UICorner")
-switchCorner.CornerRadius = UDim.new(1, 0)
-switchCorner.Parent = switchBtn
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(1, 0)
+toggleCorner.Parent = scriptsToggle
 
-local switchStroke = Instance.new("UIStroke")
-switchStroke.Color = Color3.fromRGB(255, 255, 255)
-switchStroke.Transparency = 0.6
-switchStroke.Thickness = 1
-switchStroke.Parent = switchBtn
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(255, 255, 255)
+toggleStroke.Transparency = 0.6
+toggleStroke.Thickness = 1
+toggleStroke.Parent = scriptsToggle
 
-switchBtn.MouseEnter:Connect(function()
-\tswitchBtn.BackgroundTransparency = 0.65
+scriptsToggle.MouseEnter:Connect(function()
+\tscriptsToggle.BackgroundTransparency = 0.65
 end)
-switchBtn.MouseLeave:Connect(function()
-\tswitchBtn.BackgroundTransparency = 0.82
+scriptsToggle.MouseLeave:Connect(function()
+\tscriptsToggle.BackgroundTransparency = 0.82
+end)
+
+-- Script list: a small scrollable panel of rows, one per script,
+-- revealed below the toggle when expanded.
+local listHolder = Instance.new("Frame")
+listHolder.Name = "ScriptList"
+listHolder.Position = UDim2.new(0, 16, 1, -8)
+listHolder.Size = UDim2.new(1, -32, 0, 0)
+listHolder.BackgroundTransparency = 1
+listHolder.ClipsDescendants = true
+listHolder.Visible = false
+listHolder.ZIndex = 2
+listHolder.Parent = frame
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Name = "Scroll"
+scroll.BackgroundTransparency = 1
+scroll.Size = UDim2.new(1, 0, 1, 0)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.ScrollBarThickness = 3
+scroll.ScrollBarImageTransparency = 0.4
+scroll.BorderSizePixel = 0
+scroll.ZIndex = 2
+scroll.Parent = listHolder
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 4)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = scroll
+
+local expanded = false
+local function setExpanded(value)
+\texpanded = value
+\tlocal rowCount = math.min(#scroll:GetChildren() - 1, MAX_VISIBLE_ROWS) -- minus UIListLayout
+\tlocal listHeight = expanded and (math.max(rowCount, 1) * ROW_HEIGHT + (rowCount - 1) * 4) or 0
+\tlistHolder.Visible = expanded
+\tlistHolder.Size = UDim2.new(1, -32, 0, math.max(listHeight, 0))
+\tscriptsToggle.Text = expanded and "Scripts ▴" or "Scripts ▾"
+\tframe.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT + (expanded and (listHeight + 12) or 0))
+end
+
+scriptsToggle.MouseButton1Click:Connect(function()
+\tsetExpanded(not expanded)
 end)
 
 -- Drag support
 do
 \tlocal dragging, dragStart, startPos = false, nil, nil
 \tframe.Active = true
-\tframe.InputBegan:Connect(function(input)
+\ttitle.Active = true
+\ttitle.InputBegan:Connect(function(input)
 \t\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 \t\t\tdragging = true
 \t\t\tdragStart = input.Position
@@ -242,6 +294,7 @@ local matchedGame = nil
 local scripts = {}
 local currentIndex = 0
 local currentThread = nil
+local scriptRows = {}
 
 -- Stops the currently running script before switching. This closes the
 -- coroutine it's running in, which halts it the next time it yields
@@ -254,12 +307,21 @@ local function stopCurrent()
 \tcurrentThread = nil
 end
 
+local function refreshRowHighlights()
+\tfor i, entry in ipairs(scriptRows) do
+\t\tlocal active = i == currentIndex
+\t\tentry.frame.BackgroundTransparency = active and 0.6 or 0.9
+\t\tentry.dot.TextColor3 = active and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(150, 150, 155)
+\tend
+end
+
 local function runScriptAt(index)
 \tstopCurrent()
 \tlocal s = scripts[index]
 \tif not s then return end
 \tcurrentIndex = index
 \tsetStatus("Running: " .. s.title)
+\trefreshRowHighlights()
 
 \tcurrentThread = coroutine.create(function()
 \t\tlocal ok, err = pcall(function()
@@ -272,14 +334,62 @@ local function runScriptAt(index)
 \tcoroutine.resume(currentThread)
 end
 
-local function switchScript()
-\tif #scripts <= 1 then return end
-\tlocal nextIndex = currentIndex + 1
-\tif nextIndex > #scripts then nextIndex = 1 end
-\trunScriptAt(nextIndex)
-end
+local function buildScriptRows()
+\tfor _, entry in ipairs(scriptRows) do
+\t\tentry.frame:Destroy()
+\tend
+\tscriptRows = {}
 
-switchBtn.MouseButton1Click:Connect(switchScript)
+\tfor i, s in ipairs(scripts) do
+\t\tlocal row = Instance.new("TextButton")
+\t\trow.Name = "Row" .. i
+\t\trow.LayoutOrder = i
+\t\trow.Size = UDim2.new(1, 0, 0, ROW_HEIGHT - 4)
+\t\trow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+\t\trow.BackgroundTransparency = 0.9
+\t\trow.AutoButtonColor = false
+\t\trow.Text = ""
+\t\trow.ZIndex = 2
+\t\trow.Parent = scroll
+
+\t\tlocal rowCorner = Instance.new("UICorner")
+\t\trowCorner.CornerRadius = UDim.new(0, 8)
+\t\trowCorner.Parent = row
+
+\t\tlocal dot = Instance.new("TextLabel")
+\t\tdot.Name = "dot"
+\t\tdot.BackgroundTransparency = 1
+\t\tdot.Position = UDim2.new(0, 8, 0, 0)
+\t\tdot.Size = UDim2.new(0, 16, 1, 0)
+\t\tdot.Font = Enum.Font.GothamBold
+\t\tdot.Text = s.verified and "✓" or "•"
+\t\tdot.TextColor3 = Color3.fromRGB(150, 150, 155)
+\t\tdot.TextSize = 12
+\t\tdot.ZIndex = 2
+\t\tdot.Parent = row
+
+\t\tlocal label = Instance.new("TextLabel")
+\t\tlabel.BackgroundTransparency = 1
+\t\tlabel.Position = UDim2.new(0, 26, 0, 0)
+\t\tlabel.Size = UDim2.new(1, -34, 1, 0)
+\t\tlabel.Font = Enum.Font.Gotham
+\t\tlabel.Text = s.title
+\t\tlabel.TextColor3 = Color3.fromRGB(235, 235, 240)
+\t\tlabel.TextSize = 12
+\t\tlabel.TextTruncate = Enum.TextTruncate.AtEnd
+\t\tlabel.TextXAlignment = Enum.TextXAlignment.Left
+\t\tlabel.ZIndex = 2
+\t\tlabel.Parent = row
+
+\t\trow.MouseButton1Click:Connect(function()
+\t\t\trunScriptAt(i)
+\t\t\tsetExpanded(false)
+\t\tend)
+
+\t\ttable.insert(scriptRows, { frame = row, dot = dot })
+\tend
+\trefreshRowHighlights()
+end
 
 --========================================================
 -- Boot — fetch game + its scripts live from Supabase
@@ -330,7 +440,8 @@ table.sort(fetchedScripts, function(a, b)
 end)
 scripts = fetchedScripts
 
-switchBtn.Visible = #scripts > 1
+buildScriptRows()
+scriptsToggle.Visible = #scripts > 1
 runScriptAt(1)
 `;
 

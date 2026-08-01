@@ -752,17 +752,53 @@ local function heldSelectedSeed()
 	return nil
 end
 
+-- Selected seeds in a stable order, so rotation goes round the list
+-- instead of jumping about (pairs order is arbitrary).
+local function selectedSeedNames()
+	local names = {}
+	for seedName, on in pairs(PlantSelected) do
+		if on then table.insert(names, seedName) end
+	end
+	table.sort(names)
+	return names
+end
+
+-- Equips the seed after the one currently held, wrapping around. The
+-- earlier failures came from equipping and firing in the same breath;
+-- the swap does take, it just isn't ready that instant. So this only
+-- ever equips, and the plant happens on a later tick once the Tool has
+-- actually arrived in your hands.
+local PlantRotateIndex = 0
+
+local function equipNextSelectedSeed()
+	local names = selectedSeedNames()
+	if #names == 0 then return end
+	for _ = 1, #names do
+		PlantRotateIndex = (PlantRotateIndex % #names) + 1
+		if resolveSeedTool(names[PlantRotateIndex]) then return end
+	end
+end
+
+-- How long to keep planting one seed before moving to the next. Short
+-- enough that every selected seed gets planted, long enough that the
+-- equip has time to land.
+local PlantSwitchAfter = 1.5
+local PlantCurrentSince = 0
+local PlantCurrentName = nil
+
 task.spawn(function()
 	while task.wait(PlantInterval) do
 		if PlantEnabled then
-			-- Plant whatever seed is actually in your hands. Only the
-			-- game's own equip makes the server accept a plant here —
-			-- every attempt to force a swap from the script planted
-			-- nothing — and the game auto-switches to the next seed
-			-- once one runs out, which walks through the selection on
-			-- its own.
+			local names = selectedSeedNames()
+			-- Plant whatever selected seed is actually in your hands.
+			-- Only a settled equip makes the server accept a plant.
 			local tool = heldSelectedSeed()
 			if tool then
+				if tool.Name ~= PlantCurrentName then
+					PlantCurrentName = tool.Name
+					PlantCurrentSince = tick()
+				end
+
 				local position = getPlantPosition()
 				if position then
 					if firePlant(tool.Name, position) then
@@ -770,16 +806,17 @@ task.spawn(function()
 						PlantLastFired = tool.Name
 					end
 				end
+
+				-- Rotate to the next selected seed so the whole
+				-- selection gets planted without you switching by hand.
+				if #names > 1 and tick() - PlantCurrentSince >= PlantSwitchAfter then
+					PlantCurrentSince = tick()
+					equipNextSelectedSeed()
+				end
 			else
 				-- Nothing selected is held, so there's nothing the game
-				-- will let us plant — try to equip one selected seed and
-				-- pick it up on the next tick.
-				for seedName, on in pairs(PlantSelected) do
-					if on then
-						resolveSeedTool(seedName)
-						break
-					end
-				end
+				-- will let us plant — equip one and pick it up next tick.
+				equipNextSelectedSeed()
 			end
 		end
 	end

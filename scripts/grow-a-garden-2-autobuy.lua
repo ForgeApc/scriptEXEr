@@ -57,13 +57,14 @@ end
 
 --========================================================
 -- Selection state — which items are enabled per category.
--- Defaults to everything ON; the UI below lets you turn items off.
+-- Defaults to everything OFF; nothing gets auto-bought until you
+-- explicitly toggle items on (or use one of the select-all shortcuts).
 --========================================================
 local Selected = { Seeds = {}, Gears = {}, Crates = {} }
 
 local function isSelected(category, name)
 	local v = Selected[category][name]
-	if v == nil then return true end -- default on until toggled
+	if v == nil then return false end -- default off until toggled
 	return v
 end
 
@@ -110,7 +111,7 @@ local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
-frame.Size = UDim2.new(0, 300, 0, 424)
+frame.Size = UDim2.new(0, 300, 0, 458)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
@@ -274,7 +275,7 @@ end)
 local listHolder = Instance.new("ScrollingFrame")
 listHolder.BackgroundTransparency = 1
 listHolder.Position = UDim2.new(0, 16, 0, 122)
-listHolder.Size = UDim2.new(1, -32, 1, -170)
+listHolder.Size = UDim2.new(1, -32, 1, -204)
 listHolder.CanvasSize = UDim2.new(0, 0, 0, 0)
 listHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
 listHolder.ScrollBarThickness = 3
@@ -286,7 +287,21 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 4)
 listLayout.Parent = listHolder
 
--- Select All / None row
+-- Per-category quick-select row: "All Seeds" / "All Gears" / "All Crates"
+-- — selects every item in that one category regardless of which tab
+-- you're currently viewing.
+local categoryBulkRow = Instance.new("Frame")
+categoryBulkRow.BackgroundTransparency = 1
+categoryBulkRow.Position = UDim2.new(0, 16, 1, -72)
+categoryBulkRow.Size = UDim2.new(1, -32, 0, 26)
+categoryBulkRow.Parent = frame
+
+local categoryBulkLayout = Instance.new("UIListLayout")
+categoryBulkLayout.FillDirection = Enum.FillDirection.Horizontal
+categoryBulkLayout.Padding = UDim.new(0, 6)
+categoryBulkLayout.Parent = categoryBulkRow
+
+-- Select All / None row (applies to whatever tab is currently visible)
 local bulkRow = Instance.new("Frame")
 bulkRow.BackgroundTransparency = 1
 bulkRow.Position = UDim2.new(0, 16, 1, -38)
@@ -468,6 +483,34 @@ selectNoneBtn.MouseButton1Click:Connect(function()
 		entry.paint()
 	end
 end)
+
+-- Selects every item in one category's real stock folder — not just
+-- whatever happens to be visible in the current tab — so "All Seeds"
+-- works correctly even while you're looking at the Gears tab.
+local function selectAllInCategory(categoryKey)
+	local cat = nil
+	for _, c in ipairs(categories) do
+		if c.key == categoryKey then cat = c break end
+	end
+	if not cat then return end
+
+	for _, item in ipairs(cat.stock:GetChildren()) do
+		Selected[categoryKey][item.Name] = true
+	end
+
+	for _, entry in ipairs(rowEntries) do
+		if entry.category == categoryKey then
+			entry.paint()
+		end
+	end
+end
+
+for _, cat in ipairs(categories) do
+	local btn = pillButton(categoryBulkRow, "All " .. cat.key, 84)
+	btn.MouseButton1Click:Connect(function()
+		selectAllInCategory(cat.key)
+	end)
+end
 
 local function paintTabs()
 	for key, btn in pairs(tabButtons) do

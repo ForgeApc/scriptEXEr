@@ -147,14 +147,26 @@ local function isSelected(category, name)
 	return v
 end
 
+local function countSelected()
+	local n = 0
+	for _, items in pairs(Selected) do
+		for _, on in pairs(items) do
+			if on then n += 1 end
+		end
+	end
+	return n
+end
+
 local BuyInterval = 0.5
 
--- Live proof-of-activity state, surfaced both in the console (so you
--- can literally watch it firing) and as a status line in the Buy page
--- UI — added because every previous fix here was guesswork with no
--- visibility into whether the loop was actually attempting anything.
-local BuyAttemptCount = 0
-local BuyLastAttempt = ""
+-- Live proof-of-activity state, split into two separate counters so
+-- you can tell "nothing is selected" apart from "things are selected
+-- but canAfford is blocking every single one" — those looked
+-- identical when there was only one counter that incremented after
+-- the afford check.
+local BuyConsideredCount = 0 -- selected items the loop checked, regardless of affordability
+local BuyFiredCount = 0 -- selected items that passed canAfford and got a Fire() call
+local BuyLastFired = ""
 
 -- Fires the purchase remote for every selected item on every pass,
 -- regardless of whether it currently shows in stock — some games only
@@ -165,11 +177,12 @@ local function runBuyLoop(stockFolder, remote, category)
 	task.spawn(function()
 		while task.wait(BuyInterval) do
 			for _, item in pairs(stockFolder:GetChildren()) do
-				if item and typeof(item) == "Instance" then
-					if isSelected(category, item.Name) and canAfford(item.Name) then
-						BuyAttemptCount += 1
-						BuyLastAttempt = category .. " · " .. item.Name
-						print(string.format("[SCRIPTEXER] Buy attempt #%d: %s (%s)", BuyAttemptCount, item.Name, category))
+				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
+					BuyConsideredCount += 1
+					if canAfford(item.Name) then
+						BuyFiredCount += 1
+						BuyLastFired = category .. " · " .. item.Name
+						print(string.format("[SCRIPTEXER] Buy fired #%d: %s (%s)", BuyFiredCount, item.Name, category))
 						pcall(function()
 							remote:Fire(item.Name)
 						end)
@@ -694,14 +707,19 @@ createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(
 	BuyInterval = v
 end)
 
--- Live proof the loop is actually attempting purchases — updates every
--- time runBuyLoop fires, whether or not the game accepts the purchase.
+-- Live proof of exactly what stage the loop is at: how many items are
+-- selected right now, how many times it's checked one of them
+-- (Considered), and how many actually passed canAfford and got fired
+-- (Fired). If Selected > 0 but Considered stays 0, the loop itself
+-- isn't running. If Considered climbs but Fired stays 0, canAfford is
+-- the blocker (almost always because playerdata never resolved — check
+-- the Stats tab status for that).
 local buyStatusLabel = Instance.new("TextLabel")
 buyStatusLabel.BackgroundTransparency = 1
 buyStatusLabel.Position = UDim2.new(0, 16, 0, 146)
 buyStatusLabel.Size = UDim2.new(1, -32, 0, 16)
 buyStatusLabel.Font = Enum.Font.Gotham
-buyStatusLabel.Text = "Attempts: 0 · nothing selected yet"
+buyStatusLabel.Text = "Selected: 0 · Considered: 0 · Fired: 0"
 buyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 buyStatusLabel.TextSize = 11
 buyStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -710,9 +728,21 @@ buyStatusLabel.Parent = buyPage
 
 task.spawn(function()
 	while task.wait(0.2) do
-		if BuyAttemptCount > 0 then
-			buyStatusLabel.Text = string.format("Attempts: %d · last: %s", BuyAttemptCount, BuyLastAttempt)
+		local selectedCount = countSelected()
+		local text = string.format("Selected: %d · Considered: %d · Fired: %d", selectedCount, BuyConsideredCount, BuyFiredCount)
+		if BuyFiredCount > 0 then
+			text = text .. " · last: " .. BuyLastFired
+			buyStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
+		elseif BuyConsideredCount > 0 then
+			text = text .. " (canAfford blocking every one — check Stats tab status)"
+			buyStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+		elseif selectedCount > 0 then
+			text = text .. " (loop hasn't checked yet)"
+			buyStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		else
+			buyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 		end
+		buyStatusLabel.Text = text
 	end
 end)
 

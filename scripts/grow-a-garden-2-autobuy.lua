@@ -325,6 +325,7 @@ local selectAllBtn = pillButton(bulkRow, "Select All", 90)
 local selectNoneBtn = pillButton(bulkRow, "None", 90)
 
 local rowEntries = {} -- current tab's row instances, for bulk toggling
+local rowConnections = {} -- stock .Value change connections, disconnected on every rebuild
 
 local function buildList(category)
 	for _, child in ipairs(listHolder:GetChildren()) do
@@ -332,19 +333,29 @@ local function buildList(category)
 	end
 	rowEntries = {}
 
+	for _, conn in ipairs(rowConnections) do
+		conn:Disconnect()
+	end
+	rowConnections = {}
+
 	local cat = nil
 	for _, c in ipairs(categories) do
 		if c.key == category then cat = c break end
 	end
 	if not cat then return end
 
-	local names = {}
+	-- Every item that exists in the shop's stock folder, whether it's
+	-- currently in stock or not — filtering by current stock would mean
+	-- items disappear from the list the moment they sell out.
+	local items = {}
 	for _, item in ipairs(cat.stock:GetChildren()) do
-		table.insert(names, item.Name)
+		table.insert(items, item)
 	end
-	table.sort(names)
+	table.sort(items, function(a, b) return a.Name < b.Name end)
 
-	for _, name in ipairs(names) do
+	for _, item in ipairs(items) do
+		local name = item.Name
+
 		local row = Instance.new("Frame")
 		row.Size = UDim2.new(1, 0, 0, 28)
 		row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
@@ -358,7 +369,7 @@ local function buildList(category)
 		local label = Instance.new("TextLabel")
 		label.BackgroundTransparency = 1
 		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(1, -46, 1, 0)
+		label.Size = UDim2.new(1, -128, 1, 0)
 		label.Font = Enum.Font.Gotham
 		label.Text = name
 		label.TextColor3 = Color3.fromRGB(230, 230, 235)
@@ -366,6 +377,15 @@ local function buildList(category)
 		label.TextXAlignment = Enum.TextXAlignment.Left
 		label.TextTruncate = Enum.TextTruncate.AtEnd
 		label.Parent = row
+
+		local stockLabel = Instance.new("TextLabel")
+		stockLabel.BackgroundTransparency = 1
+		stockLabel.Position = UDim2.new(1, -114, 0, 0)
+		stockLabel.Size = UDim2.new(0, 74, 1, 0)
+		stockLabel.Font = Enum.Font.Gotham
+		stockLabel.TextSize = 11
+		stockLabel.TextXAlignment = Enum.TextXAlignment.Right
+		stockLabel.Parent = row
 
 		local toggle = Instance.new("TextButton")
 		toggle.Position = UDim2.new(1, -34, 0.5, -9)
@@ -393,6 +413,14 @@ local function buildList(category)
 			knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
 		end
 		paint()
+
+		local function paintStock()
+			local inStock = item.Value and item.Value > 0
+			stockLabel.Text = inStock and "In stock" or "Out of stock"
+			stockLabel.TextColor3 = inStock and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(130, 130, 135)
+		end
+		paintStock()
+		table.insert(rowConnections, item:GetPropertyChangedSignal("Value"):Connect(paintStock))
 
 		toggle.MouseButton1Click:Connect(function()
 			Selected[category][name] = not isSelected(category, name)

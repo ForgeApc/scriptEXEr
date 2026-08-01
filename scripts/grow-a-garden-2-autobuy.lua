@@ -485,9 +485,51 @@ local function firePlant(seedName, position)
 	return false
 end
 
--- Plants at your character's current position, which is how planting
--- works manually — stand on your plot and it fills in around you.
+--------------------------------------------------------
+-- Where to plant. Three modes:
+--   "me"     — at your character, so it fills in as you walk
+--   "random" — scattered randomly across your plot
+--   "fixed"  — one pinned spot you set yourself
+--------------------------------------------------------
+local PlantMode = "me"
+local PlantFixedPosition = nil
+
+-- The plot's ground is taken to be its largest part by footprint,
+-- which is what the farmland slab reliably is. Planting happens on
+-- that part's top surface rather than at its centre, so seeds land on
+-- the ground instead of inside it.
+local function getPlotGround()
+	if not OwnerPlot then return nil end
+	local best, bestArea = nil, 0
+	for _, part in ipairs(OwnerPlot:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local area = part.Size.X * part.Size.Z
+			if area > bestArea then
+				best, bestArea = part, area
+			end
+		end
+	end
+	return best
+end
+
+local function randomPlotPosition()
+	local ground = getPlotGround()
+	if not ground then return nil end
+	-- Inset from the edges so seeds don't land half off the plot.
+	local offsetX = (math.random() * 2 - 1) * (ground.Size.X / 2) * 0.85
+	local offsetZ = (math.random() * 2 - 1) * (ground.Size.Z / 2) * 0.85
+	-- Go through the part's own CFrame so a rotated plot still works.
+	local spot = ground.CFrame * CFrame.new(offsetX, 0, offsetZ)
+	local topY = ground.Position.Y + (ground.Size.Y / 2)
+	return Vector3.new(spot.Position.X, topY, spot.Position.Z)
+end
+
 local function getPlantPosition()
+	if PlantMode == "fixed" then
+		return PlantFixedPosition
+	elseif PlantMode == "random" then
+		return randomPlotPosition()
+	end
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if root then return root.Position end
@@ -497,10 +539,13 @@ end
 task.spawn(function()
 	while task.wait(PlantInterval) do
 		if PlantEnabled then
-			local position = getPlantPosition()
-			if position then
-				for seedName, on in pairs(PlantSelected) do
-					if on then
+			for seedName, on in pairs(PlantSelected) do
+				if on then
+					-- Resolved per seed, not once per tick, so random
+					-- mode actually scatters instead of stacking every
+					-- seed on one spot.
+					local position = getPlantPosition()
+					if position then
 						if firePlant(seedName, position) then
 							PlantFiredCount += 1
 							PlantLastFired = seedName
@@ -558,7 +603,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Plant = 330, Harvest = 130, Sell = 90, Stats = 232 }
+local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Harvest = 130, Sell = 90, Stats = 232 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -1226,12 +1271,64 @@ createSlider(plantPage, 32, "Plant delay", 0.001, 10, PlantInterval, "s", functi
 	PlantInterval = v
 end)
 
+-- Placement mode selector
+local plantModeRow = Instance.new("Frame")
+plantModeRow.BackgroundTransparency = 1
+plantModeRow.Position = UDim2.new(0, 16, 0, 76)
+plantModeRow.Size = UDim2.new(1, -32, 0, 26)
+plantModeRow.Parent = plantPage
+
+local plantModeLayout = Instance.new("UIListLayout")
+plantModeLayout.FillDirection = Enum.FillDirection.Horizontal
+plantModeLayout.Padding = UDim.new(0, 8)
+plantModeLayout.Parent = plantModeRow
+
+local plantModeButtons = {}
+local plantModes = {
+	{ key = "me", label = "At me" },
+	{ key = "random", label = "Random" },
+	{ key = "fixed", label = "Fixed" },
+}
+
+local function paintPlantModes()
+	for key, btn in pairs(plantModeButtons) do
+		local on = key == PlantMode
+		btn.BackgroundTransparency = on and 0.75 or 0.94
+		btn.TextColor3 = on and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 185)
+	end
+end
+
+for _, mode in ipairs(plantModes) do
+	local btn = pillButton(plantModeRow, mode.label, 84)
+	plantModeButtons[mode.key] = btn
+	btn.MouseButton1Click:Connect(function()
+		PlantMode = mode.key
+		paintPlantModes()
+	end)
+end
+paintPlantModes()
+
+-- Pins the fixed-mode spot to wherever you're standing right now.
+local setFixedBtn = pillButton(plantPage, "Set fixed spot to where I'm standing", 268)
+setFixedBtn.Position = UDim2.new(0, 16, 0, 108)
+setFixedBtn.Size = UDim2.new(1, -32, 0, 26)
+setFixedBtn.TextSize = 11
+setFixedBtn.MouseButton1Click:Connect(function()
+	local character = Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root then
+		PlantFixedPosition = root.Position
+		PlantMode = "fixed"
+		paintPlantModes()
+	end
+end)
+
 local plantStatusLabel = Instance.new("TextLabel")
 plantStatusLabel.BackgroundTransparency = 1
-plantStatusLabel.Position = UDim2.new(0, 16, 0, 74)
+plantStatusLabel.Position = UDim2.new(0, 16, 0, 140)
 plantStatusLabel.Size = UDim2.new(1, -32, 0, 28)
 plantStatusLabel.Font = Enum.Font.Gotham
-plantStatusLabel.Text = "Stand on your plot — seeds plant at your position."
+plantStatusLabel.Text = "Planting at your position as you move."
 plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 plantStatusLabel.TextSize = 11
 plantStatusLabel.TextWrapped = true
@@ -1248,11 +1345,23 @@ task.spawn(function()
 				selectedCount, PlantFiredCount, PlantLastFired, PlantArgOrder or "?"
 			)
 			plantStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
-		elseif PlantEnabled and selectedCount > 0 then
-			plantStatusLabel.Text = "Trying to plant… stand on your plot with seeds in inventory."
+		elseif PlantMode == "fixed" and not PlantFixedPosition then
+			plantStatusLabel.Text = "No fixed spot set — tap the button above to pin one."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+		elseif PlantMode == "random" and not OwnerPlot then
+			plantStatusLabel.Text = "Still locating your plot for random placement…"
 			plantStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		elseif PlantEnabled and selectedCount > 0 then
+			plantStatusLabel.Text = "Trying to plant… make sure you own the selected seeds."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		elseif PlantMode == "random" then
+			plantStatusLabel.Text = "Scattering randomly across your plot."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+		elseif PlantMode == "fixed" then
+			plantStatusLabel.Text = "Planting at your pinned spot."
+			plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 		else
-			plantStatusLabel.Text = "Stand on your plot — seeds plant at your position."
+			plantStatusLabel.Text = "Planting at your position as you move."
 			plantStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 		end
 	end
@@ -1260,7 +1369,7 @@ end)
 
 local plantBulkRow = Instance.new("Frame")
 plantBulkRow.BackgroundTransparency = 1
-plantBulkRow.Position = UDim2.new(0, 16, 0, 104)
+plantBulkRow.Position = UDim2.new(0, 16, 0, 172)
 plantBulkRow.Size = UDim2.new(1, -32, 0, 26)
 plantBulkRow.Parent = plantPage
 
@@ -1274,8 +1383,8 @@ local plantNoneBtn = pillButton(plantBulkRow, "None", 90)
 
 local plantList = Instance.new("ScrollingFrame")
 plantList.BackgroundTransparency = 1
-plantList.Position = UDim2.new(0, 16, 0, 138)
-plantList.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Plant - 138 - 8)
+plantList.Position = UDim2.new(0, 16, 0, 206)
+plantList.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Plant - 206 - 8)
 plantList.CanvasSize = UDim2.new(0, 0, 0, 0)
 plantList.AutomaticCanvasSize = Enum.AutomaticSize.Y
 plantList.ScrollBarThickness = 3

@@ -571,15 +571,22 @@ local function resolveSeedTool(seedName)
 	end
 
 	if not equipped() then
-		pcall(function() humanoid:UnequipTools() end)
+		-- Deliberately no UnequipTools here. Unequipping first left the
+		-- character empty-handed whenever the follow-up equip did not
+		-- take, and nothing could be planted at all until you swapped by
+		-- hand. EquipTool swaps on its own; a failed swap now leaves the
+		-- previous seed in hand, which is still plantable.
 		pcall(function() humanoid:EquipTool(tool) end)
 		if not waitForEquip(0.35) then
 			-- EquipTool is unreliable in this game (tools carry custom
 			-- equip behaviour). Reparenting is what equipping actually
-			-- is, and the client is allowed to do it to its own Backpack
-			-- tools, so fall back to that.
-			pcall(function() tool.Parent = character end)
-			waitForEquip(0.35)
+			-- is, and the client may do it to its own Backpack tools —
+			-- but only when nothing else is held, since forcing a second
+			-- Tool into the character is what the game rejects.
+			if not character:FindFirstChildOfClass("Tool") then
+				pcall(function() tool.Parent = character end)
+				waitForEquip(0.35)
+			end
 		end
 	end
 
@@ -807,11 +814,17 @@ task.spawn(function()
 					end
 				end
 
-				-- Rotate to the next selected seed so the whole
-				-- selection gets planted without you switching by hand.
+				-- Rotate to the next selected seed so the whole selection
+				-- gets planted without you switching by hand. If the swap
+				-- doesn't land, the seed already in hand stays held and
+				-- planting simply continues — rotation must never be able
+				-- to leave you holding nothing.
 				if #names > 1 and tick() - PlantCurrentSince >= PlantSwitchAfter then
 					PlantCurrentSince = tick()
 					equipNextSelectedSeed()
+					if not heldSelectedSeed() then
+						resolveSeedTool(tool.Name)
+					end
 				end
 			else
 				-- Nothing selected is held, so there's nothing the game

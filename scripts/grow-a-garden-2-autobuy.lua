@@ -253,15 +253,21 @@ local function getCurrentSheckles()
 end
 
 task.spawn(function()
-	-- Cheapest and most likely first. The heap/upvalue scans walk tens
-	-- of thousands of objects, so running them on every one of 40
-	-- retries when a fast strategy would have worked is pure waste.
+	-- Authoritative sources (the game's own data) before display
+	-- scraping. Screen text is deliberately LAST: its fallback matches
+	-- any comma-formatted number, so if PlayerGui happens to have
+	-- rendered some other figure (a price, an inventory count) by the
+	-- time we scan, it could win and silently feed Stats a wrong
+	-- value. PlayerGui load timing varies between sessions, so letting
+	-- it outrank the real data table would make correctness a race.
+	-- The heap scan costs a few hundred ms with its yields — cheap
+	-- insurance against reading the wrong number.
 	local strategies = {
+		{ fn = findViaHeapTables, name = "heap tables" },
 		{ fn = findViaAttributes, name = "attributes" },
 		{ fn = findViaValueObjects, name = "value objects" },
-		{ fn = findViaScreenText, name = "screen text" },
-		{ fn = findViaHeapTables, name = "heap tables" },
 		{ fn = findViaUpvalues, name = "upvalues" },
+		{ fn = findViaScreenText, name = "screen text" },
 	}
 
 	local attempts = 0

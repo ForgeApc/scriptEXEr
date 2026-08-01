@@ -14,9 +14,12 @@
   everything it started; the only thing that reliably wipes all of it is
   a fresh Lua VM, which a rejoin gives you for free.
 
-  For your chosen script to resume automatically after the rejoin, save
-  this loadstring to your executor's Auto Execute list for this game.
-  Otherwise just re-run it manually once you're back in.
+  On executors that support queue_on_teleport (most UNC-compliant ones
+  do), the loader re-queues itself automatically so it comes back on
+  its own right after the rejoin — no manual re-paste needed. On
+  executors without it, add this loadstring to your executor's Auto
+  Execute list for this game, or just re-run it manually once you're
+  back in.
 
   Every script's code is fetched live from the SCRIPTEXER database each
   time you launch or switch — nothing is ever bundled into this loader.
@@ -26,6 +29,7 @@
 
 local SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co"
 local ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzY2F6dHR2aGd3YXF4a2RwaHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MzI0NTYsImV4cCI6MjEwMTEwODQ1Nn0.WWKLNM6ZQZKF2DVne0diOaT3ZB7apbbbuk1lTH-b4L8"
+local LOADER_URL = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/loader.lua"
 
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -263,11 +267,26 @@ end
 -- is actually gone before the new one starts.
 local function switchToScript(s)
 	setStatus("Rejoining to switch to " .. s.title .. "...")
+
+	-- queue_on_teleport (a widely supported UNC extension) re-queues this
+	-- exact loadstring to run automatically the instant the new server
+	-- loads, so the panel comes back on its own without you having to
+	-- manually re-paste anything. Not every executor has it, so this is
+	-- best-effort — we fall back to telling you to re-run it manually.
+	local requeued = false
+	if queue_on_teleport then
+		requeued = pcall(function()
+			queue_on_teleport('loadstring(game:HttpGet("' .. LOADER_URL .. '"))()')
+		end)
+	end
+
 	local ok, err = pcall(function()
 		TeleportService:Teleport(placeId, player, { scriptexerScriptId = s.id })
 	end)
 	if not ok then
 		setStatus("Couldn't rejoin automatically: " .. tostring(err) .. ". Rejoin the game manually and re-run the loadstring.")
+	elseif not requeued then
+		setStatus("Rejoining... your executor doesn't support auto-requeue, so re-run the loadstring once you're back in.")
 	end
 end
 

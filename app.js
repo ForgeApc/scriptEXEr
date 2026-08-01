@@ -97,79 +97,121 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
+-- Note: Roblox has no per-element backdrop-blur, and this panel stays
+-- on screen the whole time you play — a real screen-wide BlurEffect
+-- would blur your view of the game constantly, which defeats the
+-- point of an auto-farm/ESP HUD. The glass look here comes entirely
+-- from translucency + a gradient sheen + a bright rim edge instead.
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
-frame.Size = UDim2.new(0, 260, 0, 96)
-frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-frame.BackgroundTransparency = 0.06
+frame.Size = UDim2.new(0, 270, 0, 104)
+frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+frame.BackgroundTransparency = 0.86
 frame.BorderSizePixel = 0
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 14)
+corner.CornerRadius = UDim.new(0, 18)
 corner.Parent = frame
+
+-- Glass sheen: a faint diagonal gradient across the translucent card,
+-- brighter along the top edge like light catching frosted glass.
+local sheen = Instance.new("UIGradient")
+sheen.Color = ColorSequence.new({
+\tColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+\tColorSequenceKeypoint.new(0.5, Color3.fromRGB(210, 210, 220)),
+\tColorSequenceKeypoint.new(1, Color3.fromRGB(160, 160, 175)),
+})
+sheen.Transparency = NumberSequence.new({
+\tNumberSequenceKeypoint.new(0, 0.55),
+\tNumberSequenceKeypoint.new(0.5, 0.8),
+\tNumberSequenceKeypoint.new(1, 0.9),
+})
+sheen.Rotation = 60
+sheen.Parent = frame
 
 local stroke = Instance.new("UIStroke")
 stroke.Color = Color3.fromRGB(255, 255, 255)
-stroke.Transparency = 0.88
+stroke.Transparency = 0.55
 stroke.Thickness = 1
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 stroke.Parent = frame
+
+-- A thin bright highlight along the very top edge, like a glass rim catching light.
+local rim = Instance.new("Frame")
+rim.Name = "RimLight"
+rim.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+rim.BackgroundTransparency = 0.35
+rim.BorderSizePixel = 0
+rim.Position = UDim2.new(0, 10, 0, 1)
+rim.Size = UDim2.new(1, -20, 0, 1)
+rim.ZIndex = 2
+rim.Parent = frame
 
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
-title.Position = UDim2.new(0, 14, 0, 10)
-title.Size = UDim2.new(1, -28, 0, 18)
+title.Position = UDim2.new(0, 16, 0, 12)
+title.Size = UDim2.new(1, -32, 0, 18)
 title.Font = Enum.Font.GothamBold
 title.Text = "⚡ SCRIPTEXER"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 14
 title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 2
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
 status.Name = "Status"
 status.BackgroundTransparency = 1
-status.Position = UDim2.new(0, 14, 0, 30)
-status.Size = UDim2.new(1, -28, 0, 32)
+status.Position = UDim2.new(0, 16, 0, 32)
+status.Size = UDim2.new(1, -32, 0, 34)
 status.Font = Enum.Font.Gotham
 status.Text = "Detecting game..."
-status.TextColor3 = Color3.fromRGB(190, 190, 190)
+status.TextColor3 = Color3.fromRGB(225, 225, 230)
 status.TextSize = 12
 status.TextWrapped = true
 status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextYAlignment = Enum.TextYAlignment.Top
+status.ZIndex = 2
 status.Parent = frame
 
 local switchBtn = Instance.new("TextButton")
 switchBtn.Name = "SwitchButton"
-switchBtn.Position = UDim2.new(0, 14, 1, -34)
-switchBtn.Size = UDim2.new(1, -28, 0, 24)
+switchBtn.Position = UDim2.new(0, 16, 1, -38)
+switchBtn.Size = UDim2.new(1, -32, 0, 26)
 switchBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+switchBtn.BackgroundTransparency = 0.82
 switchBtn.AutoButtonColor = false
 switchBtn.Font = Enum.Font.GothamBold
 switchBtn.Text = "Switch Script"
-switchBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+switchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 switchBtn.TextSize = 12
 switchBtn.Visible = false
+switchBtn.ZIndex = 2
 switchBtn.Parent = frame
 
 local switchCorner = Instance.new("UICorner")
 switchCorner.CornerRadius = UDim.new(1, 0)
 switchCorner.Parent = switchBtn
 
+local switchStroke = Instance.new("UIStroke")
+switchStroke.Color = Color3.fromRGB(255, 255, 255)
+switchStroke.Transparency = 0.6
+switchStroke.Thickness = 1
+switchStroke.Parent = switchBtn
+
 switchBtn.MouseEnter:Connect(function()
-\tswitchBtn.BackgroundColor3 = Color3.fromRGB(210, 210, 210)
+\tswitchBtn.BackgroundTransparency = 0.65
 end)
 switchBtn.MouseLeave:Connect(function()
-\tswitchBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+\tswitchBtn.BackgroundTransparency = 0.82
 end)
 
 -- Drag support
 do
 \tlocal dragging, dragStart, startPos = false, nil, nil
-\ttitle.Size = UDim2.new(1, -28, 0, 18)
 \tframe.Active = true
 \tframe.InputBegan:Connect(function(input)
 \t\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then

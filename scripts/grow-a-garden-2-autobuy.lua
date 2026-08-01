@@ -558,6 +558,128 @@ task.spawn(function()
 end)
 
 --========================================================
+-- DROPS — teleports to dropped items the moment they appear.
+--
+-- The Networking dump has DroppedItem.PickupFx and RequestDrop but no
+-- "pick this up" remote, so collection is proximity-based: you have to
+-- physically be at the item. That means teleporting rather than firing
+-- something.
+--
+-- Detection is event-driven (Workspace.DescendantAdded) rather than
+-- polling a known folder, because nothing in the dump reveals where
+-- drops get parented — and "as soon as it drops" is exactly what an
+-- Added signal gives you, with no guessing about container names.
+--========================================================
+local Workspace = game:GetService("Workspace")
+
+local CollectEnabled = false
+local CollectEverything = true
+local CollectSelected = {} -- seed/item name -> true
+local CollectReturn = true -- go back to where you were afterwards
+local CollectDwell = 0.35 -- seconds to linger so the pickup registers
+local CollectedCount = 0
+local CollectLast = ""
+local CollectPending = {}
+
+local function isCollectSelected(name)
+	return CollectSelected[name] == true
+end
+
+local function countCollectSelected()
+	local n = 0
+	for _, on in pairs(CollectSelected) do
+		if on then n += 1 end
+	end
+	return n
+end
+
+-- Substring match, so "Gold Carrot" is caught by a "Gold" filter.
+local function matchesCollectFilter(instanceName)
+	if CollectEverything then return true end
+	local lower = tostring(instanceName):lower()
+	for name, on in pairs(CollectSelected) do
+		if on and lower:find(tostring(name):lower(), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function getRoot()
+	local character = Players.LocalPlayer.Character
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getInstancePosition(inst)
+	if inst:IsA("BasePart") then return inst.Position end
+	if inst:IsA("Model") then
+		local primary = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
+		if primary then return primary.Position end
+	end
+	return nil
+end
+
+-- Some games gate pickup behind a ProximityPrompt rather than a plain
+-- touch. Firing it costs nothing when there isn't one.
+local function firePrompts(inst)
+	if not fireproximityprompt then return end
+	pcall(function()
+		for _, descendant in ipairs(inst:GetDescendants()) do
+			if descendant:IsA("ProximityPrompt") then
+				fireproximityprompt(descendant)
+			end
+		end
+		if inst:IsA("ProximityPrompt") then
+			fireproximityprompt(inst)
+		end
+	end)
+end
+
+local function collectDrop(target)
+	if not target or not target.Parent then return false end
+	local root = getRoot()
+	if not root then return false end
+	local position = getInstancePosition(target)
+	if not position then return false end
+
+	local origin = root.CFrame
+	root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+	task.wait(CollectDwell)
+	firePrompts(target)
+
+	if CollectReturn then
+		local rootNow = getRoot()
+		if rootNow then rootNow.CFrame = origin end
+	end
+	return true
+end
+
+Workspace.DescendantAdded:Connect(function(inst)
+	-- Deliberately cheap: this fires constantly as parts stream in, so
+	-- bail out before doing any string work whenever collection is off.
+	if not CollectEnabled then return end
+	if not (inst:IsA("Model") or inst:IsA("BasePart")) then return end
+	if not matchesCollectFilter(inst.Name) then return end
+	table.insert(CollectPending, inst)
+end)
+
+task.spawn(function()
+	while task.wait(0.05) do
+		if CollectEnabled and #CollectPending > 0 then
+			local target = table.remove(CollectPending, 1)
+			local ok, collected = pcall(collectDrop, target)
+			if ok and collected then
+				CollectedCount += 1
+				CollectLast = target.Name
+			end
+		elseif #CollectPending > 0 then
+			-- Disabled mid-queue; don't teleport to stale targets later.
+			CollectPending = {}
+		end
+	end
+end)
+
+--========================================================
 -- SELL — fires the game's own "sell everything" remote on a delay.
 --========================================================
 local SellEnabled = false
@@ -603,14 +725,14 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Harvest = 130, Sell = 90, Stats = 232 }
+local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 130, Sell = 90, Stats = 232 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
-frame.Size = UDim2.new(0, 300, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
+frame.Size = UDim2.new(0, 344, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
@@ -928,7 +1050,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -946,13 +1068,13 @@ local function setActivePage(name)
 	for key, page in pairs(pages) do
 		page.Visible = key == name
 	end
-	frame.Size = UDim2.new(0, 300, 0, TOP_OFFSET + PAGE_HEIGHTS[name] + 8)
+	frame.Size = UDim2.new(0, 344, 0, TOP_OFFSET + PAGE_HEIGHTS[name] + 8)
 	paintTopTabs()
 end
 
 for _, key in ipairs(pageOrder) do
 	-- 5 tabs across a 268px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 50)
+	local btn = pillButton(topTabBar, key, 48)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -1477,6 +1599,171 @@ end)
 plantNoneBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(plantRowEntries) do
 		PlantSelected[entry.name] = false
+		entry.paint()
+	end
+end)
+
+--========================================================
+-- DROPS page
+--========================================================
+local dropsPage = pages.Drops
+
+createToggleRow(dropsPage, 0, "Enable Auto Collect", CollectEnabled, function(state)
+	CollectEnabled = state
+end)
+
+createToggleRow(dropsPage, 30, "Return to my spot after", CollectReturn, function(state)
+	CollectReturn = state
+end)
+
+createToggleRow(dropsPage, 60, "Collect everything dropped", CollectEverything, function(state)
+	CollectEverything = state
+end)
+
+createSlider(dropsPage, 94, "Pickup dwell", 0.05, 2, CollectDwell, "s", function(v)
+	CollectDwell = v
+end)
+
+local dropsStatusLabel = Instance.new("TextLabel")
+dropsStatusLabel.BackgroundTransparency = 1
+dropsStatusLabel.Position = UDim2.new(0, 16, 0, 138)
+dropsStatusLabel.Size = UDim2.new(1, -32, 0, 28)
+dropsStatusLabel.Font = Enum.Font.Gotham
+dropsStatusLabel.Text = "Teleports to drops the instant they appear."
+dropsStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+dropsStatusLabel.TextSize = 11
+dropsStatusLabel.TextWrapped = true
+dropsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+dropsStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+dropsStatusLabel.Parent = dropsPage
+
+task.spawn(function()
+	while task.wait(0.2) do
+		if CollectedCount > 0 then
+			dropsStatusLabel.Text = string.format("Collected: %d · last: %s", CollectedCount, CollectLast)
+			dropsStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
+		elseif CollectEnabled and not CollectEverything and countCollectSelected() == 0 then
+			dropsStatusLabel.Text = "Nothing selected below, and 'collect everything' is off."
+			dropsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+		elseif CollectEnabled then
+			dropsStatusLabel.Text = "Watching for drops…"
+			dropsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		else
+			dropsStatusLabel.Text = "Teleports to drops the instant they appear."
+			dropsStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+		end
+	end
+end)
+
+local dropsBulkRow = Instance.new("Frame")
+dropsBulkRow.BackgroundTransparency = 1
+dropsBulkRow.Position = UDim2.new(0, 16, 0, 168)
+dropsBulkRow.Size = UDim2.new(1, -32, 0, 26)
+dropsBulkRow.Parent = dropsPage
+
+local dropsBulkLayout = Instance.new("UIListLayout")
+dropsBulkLayout.FillDirection = Enum.FillDirection.Horizontal
+dropsBulkLayout.Padding = UDim.new(0, 8)
+dropsBulkLayout.Parent = dropsBulkRow
+
+local dropsAllBtn = pillButton(dropsBulkRow, "Select All", 90)
+local dropsNoneBtn = pillButton(dropsBulkRow, "None", 90)
+
+local dropsList = Instance.new("ScrollingFrame")
+dropsList.BackgroundTransparency = 1
+dropsList.Position = UDim2.new(0, 16, 0, 202)
+dropsList.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Drops - 202 - 8)
+dropsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+dropsList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+dropsList.ScrollBarThickness = 3
+dropsList.ScrollBarImageTransparency = 0.4
+dropsList.BorderSizePixel = 0
+dropsList.Parent = dropsPage
+
+local dropsListLayout = Instance.new("UIListLayout")
+dropsListLayout.Padding = UDim.new(0, 4)
+dropsListLayout.Parent = dropsList
+
+local dropsRowEntries = {}
+
+do
+	-- Filter names come from the live seed stock, same as everywhere
+	-- else, so they're real in-game names rather than guesses. Matching
+	-- is substring-based, so selecting "Gold" also catches "Gold Apple".
+	local names = {}
+	for _, item in ipairs(SeedsStock:GetChildren()) do
+		table.insert(names, item.Name)
+	end
+	table.sort(names)
+
+	for _, name in ipairs(names) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 28)
+		row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		row.BackgroundTransparency = 0.93
+		row.Parent = dropsList
+
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 8)
+		rowCorner.Parent = row
+
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(1, -46, 1, 0)
+		label.Font = Enum.Font.Gotham
+		label.Text = name
+		label.TextColor3 = Color3.fromRGB(230, 230, 235)
+		label.TextSize = 12
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.Parent = row
+
+		local toggle = Instance.new("TextButton")
+		toggle.Position = UDim2.new(1, -34, 0.5, -9)
+		toggle.Size = UDim2.new(0, 26, 0, 18)
+		toggle.AutoButtonColor = false
+		toggle.Text = ""
+		toggle.Parent = row
+
+		local toggleCorner = Instance.new("UICorner")
+		toggleCorner.CornerRadius = UDim.new(1, 0)
+		toggleCorner.Parent = toggle
+
+		local knob = Instance.new("Frame")
+		knob.Size = UDim2.new(0, 14, 0, 14)
+		knob.Position = UDim2.new(0, 2, 0.5, -7)
+		knob.Parent = toggle
+		local knobCorner = Instance.new("UICorner")
+		knobCorner.CornerRadius = UDim.new(1, 0)
+		knobCorner.Parent = knob
+
+		local function paint()
+			local on = isCollectSelected(name)
+			toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
+			knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+			knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+		end
+		paint()
+
+		toggle.MouseButton1Click:Connect(function()
+			CollectSelected[name] = not isCollectSelected(name)
+			paint()
+		end)
+
+		table.insert(dropsRowEntries, { name = name, paint = paint })
+	end
+end
+
+dropsAllBtn.MouseButton1Click:Connect(function()
+	for _, entry in ipairs(dropsRowEntries) do
+		CollectSelected[entry.name] = true
+		entry.paint()
+	end
+end)
+dropsNoneBtn.MouseButton1Click:Connect(function()
+	for _, entry in ipairs(dropsRowEntries) do
+		CollectSelected[entry.name] = false
 		entry.paint()
 	end
 end)

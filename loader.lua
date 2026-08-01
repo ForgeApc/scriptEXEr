@@ -3,8 +3,20 @@
   Detects the Roblox game you're currently in (via game.PlaceId), shows
   a small clean dark HUD in the top-right corner, and runs the best
   matching script from the SCRIPTEXER catalog. Expand the panel to see
-  every script registered for that game and switch between them —
-  switching stops whichever one is currently running first.
+  every script registered for that game and switch between them.
+
+  Switching REJOINS the server. That's not a limitation of this loader —
+  it's the only way to guarantee a previously injected script is fully
+  gone. Most real script hubs (Polluted Hub included) spawn their own
+  background loops via task.spawn()/RunService connections the instant
+  they run, completely outside anything this loader controls. There is
+  no generic executor API to reach into arbitrary foreign code and kill
+  everything it started; the only thing that reliably wipes all of it is
+  a fresh Lua VM, which a rejoin gives you for free.
+
+  For your chosen script to resume automatically after the rejoin, save
+  this loadstring to your executor's Auto Execute list for this game.
+  Otherwise just re-run it manually once you're back in.
 
   Every script's code is fetched live from the SCRIPTEXER database each
   time you launch or switch — nothing is ever bundled into this loader.
@@ -17,6 +29,9 @@ local ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local player = Players.LocalPlayer
 local placeId = game.PlaceId
 
 --========================================================
@@ -47,6 +62,15 @@ local function parseDownloads(s)
 	elseif suffix == "M" then num = num * 1e6
 	elseif suffix == "B" then num = num * 1e9 end
 	return num
+end
+
+-- Which script (if any) we were asked to run after a rejoin.
+local requestedScriptId = nil
+do
+	local ok, joinData = pcall(function() return player:GetJoinData() end)
+	if ok and joinData and joinData.TeleportData and joinData.TeleportData.scriptexerScriptId then
+		requestedScriptId = joinData.TeleportData.scriptexerScriptId
+	end
 end
 
 --========================================================
@@ -223,38 +247,34 @@ end
 --========================================================
 local matchedGame = nil
 local scripts = {}
-local currentIndex = 0
-local currentThread = nil
 local scriptRows = {}
 
--- Stops the currently running script before switching. This closes the
--- coroutine it's running in, which halts it the next time it yields
--- (e.g. on wait()/task.wait()) — the best generic "unload" available
--- for arbitrary injected scripts without their cooperation.
-local function stopCurrent()
-	if currentThread and coroutine.status(currentThread) ~= "dead" then
-		pcall(coroutine.close, currentThread)
-	end
-	currentThread = nil
-end
-
-local function refreshRowHighlights()
-	for i, entry in ipairs(scriptRows) do
-		local active = i == currentIndex
+local function refreshRowHighlights(activeId)
+	for _, entry in ipairs(scriptRows) do
+		local active = entry.id == activeId
 		entry.frame.BackgroundTransparency = active and 0.6 or 0.9
 		entry.dot.TextColor3 = active and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(150, 150, 155)
 	end
 end
 
-local function runScriptAt(index)
-	stopCurrent()
-	local s = scripts[index]
-	if not s then return end
-	currentIndex = index
-	setStatus("Running: " .. s.title)
-	refreshRowHighlights()
+-- Rejoins the server, asking the loader (on rejoin) to run this specific
+-- script. This is the only reliable way to guarantee whatever script is
+-- running right now — including its background loops/connections/GUIs —
+-- is actually gone before the new one starts.
+local function switchToScript(s)
+	setStatus("Rejoining to switch to " .. s.title .. "...")
+	local ok, err = pcall(function()
+		TeleportService:Teleport(placeId, player, { scriptexerScriptId = s.id })
+	end)
+	if not ok then
+		setStatus("Couldn't rejoin automatically: " .. tostring(err) .. ". Rejoin the game manually and re-run the loadstring.")
+	end
+end
 
-	currentThread = coroutine.create(function()
+local function runScript(s)
+	setStatus("Running: " .. s.title)
+	refreshRowHighlights(s.id)
+	task.spawn(function()
 		local ok, err = pcall(function()
 			loadstring(s.loadstring)()
 		end)
@@ -262,10 +282,9 @@ local function runScriptAt(index)
 			setStatus("Failed: " .. s.title .. " — " .. tostring(err))
 		end
 	end)
-	coroutine.resume(currentThread)
 end
 
-local function buildScriptRows()
+local function buildScriptRows(activeId)
 	for _, entry in ipairs(scriptRows) do
 		entry.frame:Destroy()
 	end
@@ -313,13 +332,14 @@ local function buildScriptRows()
 		label.Parent = row
 
 		row.MouseButton1Click:Connect(function()
-			runScriptAt(i)
 			setExpanded(false)
+			if s.id == activeId then return end
+			switchToScript(s)
 		end)
 
-		table.insert(scriptRows, { frame = row, dot = dot })
+		table.insert(scriptRows, { frame = row, dot = dot, id = s.id })
 	end
-	refreshRowHighlights()
+	refreshRowHighlights(activeId)
 end
 
 --========================================================
@@ -347,7 +367,7 @@ matchedGame = games[1]
 setStatus("Script for " .. matchedGame.name .. " launching...")
 
 local scriptsUrl = string.format(
-	"%s/rest/v1/scripts?game_id=eq.%s&select=title,loadstring,verified,downloads&apikey=%s",
+	"%s/rest/v1/scripts?game_id=eq.%s&select=id,title,loadstring,verified,downloads&apikey=%s",
 	SUPABASE_URL, HttpService:UrlEncode(matchedGame.id), ANON_KEY
 )
 local scriptsBody = httpGet(scriptsUrl)
@@ -371,6 +391,18 @@ table.sort(fetchedScripts, function(a, b)
 end)
 scripts = fetchedScripts
 
-buildScriptRows()
+-- If we just rejoined to switch to a specific script, run that one.
+-- Otherwise run the best pick (verified + most downloads).
+local toRun = scripts[1]
+if requestedScriptId then
+	for _, s in ipairs(scripts) do
+		if s.id == requestedScriptId then
+			toRun = s
+			break
+		end
+	end
+end
+
+buildScriptRows(toRun.id)
 scriptsToggle.Visible = #scripts > 1
-runScriptAt(1)
+runScript(toRun)

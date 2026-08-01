@@ -582,7 +582,7 @@ local CollectEnabled = false
 local CollectEverything = true
 local CollectSelected = {} -- item name -> true
 local CollectReturn = true -- go back to where you were afterwards
-local CollectDwell = 0.01 -- seconds to linger before triggering
+local CollectDwell = 0.15 -- seconds to linger before triggering
 local CollectedCount = 0
 local CollectLast = ""
 local CollectPending = {}
@@ -599,22 +599,11 @@ local function countCollectSelected()
 	return n
 end
 
--- What to call a prompt's item, for filtering and for the status line.
--- Declared before shouldCollect(), which calls it — a local referenced
--- above its declaration would compile as a global lookup and be nil at
--- runtime.
-local function promptName(prompt)
-	if prompt.ObjectText and prompt.ObjectText ~= "" then
-		return prompt.ObjectText
-	end
-	local parent = prompt.Parent
-	return parent and parent.Name or "?"
-end
-
 -- Exact (case-insensitive) name match. Gold / Rainbow / Mega are their
 -- own distinct seeds here, not mutation prefixes on other seeds, so
 -- substring matching would wrongly rope in unrelated items.
-local function matchesSelectedName(name)
+local function matchesCollectFilter(name)
+	if CollectEverything then return true end
 	local lower = tostring(name):lower()
 	for selected, on in pairs(CollectSelected) do
 		if on and tostring(selected):lower() == lower then
@@ -624,39 +613,18 @@ local function matchesSelectedName(name)
 	return false
 end
 
--- Prompts whose action would do something destructive or unwanted if
--- triggered blindly. This matters most for the sweep of pre-existing
--- prompts: the world is full of shop/NPC prompts that were already
--- there, and "collect everything" would otherwise walk up and trigger
--- them — including, in this game, a Sell All prompt that would dump
--- your inventory.
-local RISKY_PROMPT_WORDS = {
-	"sell", "shop", "buy", "purchase", "trade", "teleport", "travel",
-	"delete", "destroy", "reset", "leave", "claim", "donate",
-}
-
-local function isRiskyPrompt(prompt)
-	local text = (tostring(prompt.ActionText or "") .. " " .. tostring(prompt.ObjectText or "")):lower()
-	for _, word in ipairs(RISKY_PROMPT_WORDS) do
-		if text:find(word, 1, true) then return true end
-	end
-	return false
-end
-
-local function shouldCollect(prompt)
-	-- An explicit selection is taken at face value — you picked it.
-	if not CollectEverything then
-		return matchesSelectedName(promptName(prompt))
-	end
-	-- "Everything" is deliberately everything-except-risky rather than
-	-- a whitelist, so drops still get caught whatever their prompt text
-	-- says, while shop/sell prompts don't.
-	return not isRiskyPrompt(prompt)
-end
-
 local function getRoot()
 	local character = Players.LocalPlayer.Character
 	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+-- What to call a prompt's item, for filtering and for the status line.
+local function promptName(prompt)
+	if prompt.ObjectText and prompt.ObjectText ~= "" then
+		return prompt.ObjectText
+	end
+	local parent = prompt.Parent
+	return parent and parent.Name or "?"
 end
 
 local function promptPosition(prompt)
@@ -717,38 +685,9 @@ Workspace.DescendantAdded:Connect(function(inst)
 	-- stream in, and the class check rejects almost everything.
 	if not CollectEnabled then return end
 	if not inst:IsA("ProximityPrompt") then return end
-	if not shouldCollect(inst) then return end
+	if not matchesCollectFilter(promptName(inst)) then return end
 	table.insert(CollectPending, inst)
 end)
-
--- DescendantAdded only sees things that appear *after* it's connected,
--- so anything already lying on the ground when you enable collection
--- would be ignored. This sweeps those up once on enable.
-local sweepRunning = false
-local function sweepExistingDrops()
-	if sweepRunning then return end
-	sweepRunning = true
-	task.spawn(function()
-		local ok, descendants = pcall(function() return Workspace:GetDescendants() end)
-		if ok and descendants then
-			local scanned = 0
-			for _, inst in ipairs(descendants) do
-				-- Workspace can hold tens of thousands of instances;
-				-- yielding keeps the sweep from hitching the game.
-				scanned += 1
-				if scanned % 2000 == 0 then task.wait() end
-				if not CollectEnabled then break end
-				if inst:IsA("ProximityPrompt") then
-					local okCheck, wanted = pcall(shouldCollect, inst)
-					if okCheck and wanted then
-						table.insert(CollectPending, inst)
-					end
-				end
-			end
-		end
-		sweepRunning = false
-	end)
-end
 
 task.spawn(function()
 	while task.wait(0.05) do
@@ -1699,10 +1638,6 @@ local dropsPage = pages.Drops
 
 createToggleRow(dropsPage, 0, "Enable Auto Collect", CollectEnabled, function(state)
 	CollectEnabled = state
-	if state then
-		-- Pick up whatever's already lying around, not just new drops.
-		sweepExistingDrops()
-	end
 end)
 
 createToggleRow(dropsPage, 30, "Return to my spot after", CollectReturn, function(state)
@@ -1713,7 +1648,7 @@ createToggleRow(dropsPage, 60, "Collect everything dropped", CollectEverything, 
 	CollectEverything = state
 end)
 
-createSlider(dropsPage, 94, "Pickup dwell", 0.01, 2, CollectDwell, "s", function(v)
+createSlider(dropsPage, 94, "Pickup dwell", 0.05, 2, CollectDwell, "s", function(v)
 	CollectDwell = v
 end)
 

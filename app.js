@@ -35,6 +35,95 @@
     return html;
   }
 
+  /* Universal Loader — detects the current game via PlaceId and runs
+     the best matching script from the SCRIPTEXER catalog. Mirrors loader.lua. */
+  const LOADER_SCRIPT = `local SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co"
+local ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzY2F6dHR2aGd3YXF4a2RwaHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MzI0NTYsImV4cCI6MjEwMTEwODQ1Nn0.WWKLNM6ZQZKF2DVne0diOaT3ZB7apbbbuk1lTH-b4L8"
+
+local HttpService = game:GetService("HttpService")
+local placeId = game.PlaceId
+
+local function httpGet(url)
+\tlocal ok, res = pcall(function()
+\t\treturn game:HttpGet(url)
+\tend)
+\tif ok and res then return res end
+
+\tlocal req = (syn and syn.request) or (http and http.request) or http_request or request
+\tif req then
+\t\tlocal ok2, res2 = pcall(function()
+\t\t\treturn req({ Url = url, Method = "GET" }).Body
+\t\tend)
+\t\tif ok2 then return res2 end
+\tend
+\treturn nil
+end
+
+local function parseDownloads(s)
+\tif not s then return 0 end
+\tlocal num, suffix = s:match("([%d%.]+)%s*([KMB]?)")
+\tnum = tonumber(num) or 0
+\tif suffix == "K" then num = num * 1e3
+\telseif suffix == "M" then num = num * 1e6
+\telseif suffix == "B" then num = num * 1e9 end
+\treturn num
+end
+
+warn("[SCRIPTEXER] Detecting game (PlaceId: " .. tostring(placeId) .. ")...")
+
+local gamesUrl = string.format(
+\t"%s/rest/v1/games?place_id=eq.%d&select=id,name&apikey=%s",
+\tSUPABASE_URL, placeId, ANON_KEY
+)
+local gamesBody = httpGet(gamesUrl)
+if not gamesBody then
+\twarn("[SCRIPTEXER] Couldn't reach the script database. Check your internet connection.")
+\treturn
+end
+
+local okGames, games = pcall(function() return HttpService:JSONDecode(gamesBody) end)
+if not okGames or #games == 0 then
+\twarn("[SCRIPTEXER] No scripts registered for this game yet (PlaceId: " .. tostring(placeId) .. ").")
+\twarn("[SCRIPTEXER] Browse scripts manually at your SCRIPTEXER site.")
+\treturn
+end
+
+local matchedGame = games[1]
+warn("[SCRIPTEXER] Game detected: " .. matchedGame.name)
+
+local scriptsUrl = string.format(
+\t"%s/rest/v1/scripts?game_id=eq.%s&select=title,loadstring,verified,downloads&apikey=%s",
+\tSUPABASE_URL, HttpService:UrlEncode(matchedGame.id), ANON_KEY
+)
+local scriptsBody = httpGet(scriptsUrl)
+if not scriptsBody then
+\twarn("[SCRIPTEXER] Failed to fetch scripts for " .. matchedGame.name)
+\treturn
+end
+
+local okScripts, scripts = pcall(function() return HttpService:JSONDecode(scriptsBody) end)
+if not okScripts or #scripts == 0 then
+\twarn("[SCRIPTEXER] " .. matchedGame.name .. " has no scripts uploaded yet.")
+\treturn
+end
+
+table.sort(scripts, function(a, b)
+\tif a.verified ~= b.verified then
+\t\treturn a.verified
+\tend
+\treturn parseDownloads(a.downloads) > parseDownloads(b.downloads)
+end)
+
+local chosen = scripts[1]
+warn("[SCRIPTEXER] Running: " .. chosen.title)
+
+local ok, err = pcall(function()
+\tloadstring(chosen.loadstring)()
+end)
+if not ok then
+\twarn("[SCRIPTEXER] Script failed to run: " .. tostring(err))
+end`;
+
   /* Build a single exploit card markup. Shared by viewGame and live filtering. */
   function exploitCardHtml(game, e) {
     return `
@@ -343,6 +432,47 @@
       </section>`;
   }
 
+  // UNIVERSAL LOADER
+  function viewLoader() {
+    return `
+      <section class="view">
+        <div class="page-hero">
+          <span class="eyebrow">SCRIPTEXER · Tools</span>
+          <h1>Universal Loader</h1>
+          <p>One script for every game. Paste it into your executor — it detects which Roblox game you're in and automatically runs the best script for it.</p>
+        </div>
+
+        <div class="detail-panel glass">
+          <h2>How it works</h2>
+          <p style="margin-bottom:14px;color:var(--text-dim);font-size:0.88rem">
+            The loader reads <code>game.PlaceId</code>, looks it up against the SCRIPTEXER catalog, and runs the verified script with the most downloads for that game. If a game has no scripts yet, it'll tell you instead of failing silently.
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-label">
+                <span class="code-dots"><span></span><span></span><span></span></span>
+                Lua
+              </span>
+              <button class="copy-btn" id="loaderCopyBtn" aria-label="Copy loader script">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span class="copy-label">Copy</span>
+              </button>
+            </div>
+            <pre><code id="loaderCode">${highlightLoadstring(LOADER_SCRIPT)}</code></pre>
+          </div>
+        </div>
+
+        <div class="detail-panel glass">
+          <h2>Requirements</h2>
+          <ul class="req-list">
+            <li>Any executor supporting UNC-level HttpGet or a raw HTTP request function (syn.request / http.request / http_request / request)</li>
+            <li>Stable internet connection</li>
+            <li>The game must have at least one script added on the admin panel, with its Roblox Place ID set</li>
+          </ul>
+        </div>
+      </section>`;
+  }
+
   // EXECUTOR DETAIL
   function viewExecutor(executorId) {
     const ex = DATA.executors.find((e) => e.id === executorId);
@@ -631,6 +761,8 @@
       ${fieldImage("image", "Thumbnail", "", "🎮")}
       ${fieldText("name", "Name", "", "Blox Fruits")}
       ${fieldText("sub", "Subtitle", "", "Sail the seas & grind fruits")}
+      ${fieldNumber("place_id", "Roblox Place ID", "")}
+      <label class="admin-field"><span>&nbsp;</span><em>Used by the Universal Loader to detect this game. Find it in the game's Roblox URL: roblox.com/games/<strong>PLACE_ID</strong>/name</em></label>
       <button class="admin-btn admin-btn-save" data-admin-save="game-new">Create Game</button>
     `);
     bindImagePreview(document.getElementById("adminModal"));
@@ -643,6 +775,8 @@
       ${fieldImage("image", "Thumbnail", g.image, g.emoji)}
       ${fieldText("name", "Name", g.name)}
       ${fieldText("sub", "Subtitle", g.sub || "")}
+      ${fieldNumber("place_id", "Roblox Place ID", g.place_id)}
+      <label class="admin-field"><span>&nbsp;</span><em>Used by the Universal Loader to detect this game. Find it in the game's Roblox URL: roblox.com/games/<strong>PLACE_ID</strong>/name</em></label>
       <button class="admin-btn admin-btn-save" data-admin-save="game" data-id="${escapeHtml(gameId)}">Save Changes</button>
     `);
     bindImagePreview(document.getElementById("adminModal"));
@@ -785,6 +919,7 @@
         await window.Store.insertGame({
           id, name: data.name, sub: data.sub || "", emoji: "🎮",
           image: data.image || "", gradient: "linear-gradient(135deg, #1a1a1a, #050505)",
+          place_id: data.place_id || null,
         });
         await saveAndRefresh();
         showToast("Game added");
@@ -796,6 +931,7 @@
           name: data.name || g.name,
           sub: data.sub || "",
           image: data.image || "",
+          place_id: data.place_id || null,
         });
         await saveAndRefresh();
         showToast("Game saved");
@@ -949,6 +1085,9 @@
       const executorId = route.split("/")[2];
       html = viewExecutor(executorId);
       activeRoute = "/executors";
+    } else if (route === "/loader") {
+      html = viewLoader();
+      activeRoute = "/loader";
     } else if (route === "/discord" || route === "discord") {
       html = viewHome("");
       activeRoute = "/";
@@ -1080,6 +1219,25 @@
           showToast("Loadstring copied to clipboard");
           setTimeout(() => {
             copyBtn.classList.remove("copied");
+            if (label) label.textContent = "Copy";
+          }, 1800);
+        } else {
+          showToast("Copy failed — select and copy manually");
+        }
+      });
+    }
+
+    const loaderCopyBtn = document.getElementById("loaderCopyBtn");
+    if (loaderCopyBtn) {
+      loaderCopyBtn.addEventListener("click", async () => {
+        const ok = await copyText(LOADER_SCRIPT);
+        const label = loaderCopyBtn.querySelector(".copy-label");
+        if (ok) {
+          loaderCopyBtn.classList.add("copied");
+          if (label) label.textContent = "Copied!";
+          showToast("Loader script copied to clipboard");
+          setTimeout(() => {
+            loaderCopyBtn.classList.remove("copied");
             if (label) label.textContent = "Copy";
           }, 1800);
         } else {
@@ -1259,6 +1417,7 @@
     // Determine active route for indicator
     let activeRoute = "/";
     if (route === "/executors" || route.startsWith("/executor/")) activeRoute = "/executors";
+    else if (route === "/loader") activeRoute = "/loader";
     positionNavIndicator(activeRoute);
   });
 

@@ -547,20 +547,29 @@ local function resolveSeedTool(seedName)
 	end
 
 	local tool = match(character) or match(backpack)
-	if not tool or not character then return tool end
+	if not tool or not character then return nil end
 
 	-- The captured call passes the Tool as it lives under the CHARACTER
 	-- (Workspace.<player>.<tool>), i.e. equipped. Equipping is not
-	-- instant, so wait for the reparent rather than firing at a Tool the
-	-- server still sees sitting in the Backpack.
+	-- instant, and swapping straight from one seed to another often
+	-- doesn't take while another Tool is still held — which is why only
+	-- whichever seed happened to be in hand was planting. So: unequip,
+	-- equip, then confirm the reparent actually happened.
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid and tool.Parent ~= character then
+	if not humanoid then return nil end
+
+	if tool.Parent ~= character then
+		pcall(function() humanoid:UnequipTools() end)
 		pcall(function() humanoid:EquipTool(tool) end)
-		local deadline = tick() + 0.5
+		local deadline = tick() + 0.6
 		while tick() < deadline and tool.Parent ~= character do
 			task.wait(0.03)
 		end
 	end
+
+	-- Never fire holding the wrong seed: the remote would plant whatever
+	-- is actually equipped, or nothing, and the failure would be silent.
+	if tool.Parent ~= character then return nil end
 	return tool
 end
 
@@ -612,9 +621,13 @@ end
 local function firePlant(seedName, position)
 	local tool = resolveSeedTool(seedName)
 	PlantLastTool = tool and tool.Name or "none"
-	-- Use the Tool's real in-world name when we have one — the shop name
-	-- and the item name differ in prefixed worlds like Maple.
-	local candidates = plantCandidates(tool and tool.Name or seedName, position, tool)
+	-- No equipped Tool means there's nothing to plant with — firing
+	-- anyway would just spam the remote with a seed we don't hold.
+	if not tool then return false end
+
+	-- Use the Tool's real in-world name: the shop name and the item name
+	-- differ in prefixed worlds like Maple.
+	local candidates = plantCandidates(tool.Name, position, tool)
 
 	if PlantArgOrder then
 		for _, candidate in ipairs(candidates) do

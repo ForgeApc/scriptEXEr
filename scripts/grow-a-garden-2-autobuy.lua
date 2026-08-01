@@ -160,7 +160,77 @@ local function findViaAttributes()
 	return nil
 end
 
--- 4. A NumberValue/IntValue somewhere under the player. Deliberately
+-- Parses a currency string from the game's own on-screen HUD, e.g.
+-- "1,913,817" or "$1,913,817" -> 1913817. Deliberately REJECTS
+-- abbreviated forms ("1.9M"), because stripping the suffix off those
+-- would silently yield 1.9 instead of 1900000 — far worse than
+-- reporting no value at all.
+local function parseExactNumber(text)
+	if type(text) ~= "string" then return nil end
+	if text:match("%d%s*[KkMmBbTt]") then return nil end -- abbreviated, not exact
+	local cleaned = text:gsub(",", ""):gsub("[^%d%.%-]", "")
+	if cleaned == "" then return nil end
+	return tonumber(cleaned)
+end
+
+-- 4. The game's own on-screen Sheckles counter. Roblox HUDs commonly
+--    show the full comma-formatted number even when leaderstats only
+--    carries the abbreviated version, so this can be exact where
+--    leaderstats isn't.
+local function findViaScreenText()
+	local player = Players.LocalPlayer
+	local playerGui = player:FindFirstChild("PlayerGui")
+	if not playerGui then return nil end
+
+	-- Never match our own panel's number labels — this script formats
+	-- its stats with commas too, and reading its own output back in
+	-- would be a self-referential feedback loop. (Our GUI normally
+	-- lives in CoreGui/gethui() rather than PlayerGui, but guard
+	-- anyway in case that ever changes.)
+	local function isOurs(inst)
+		local node, depth = inst, 0
+		while node and depth < 8 do
+			if tostring(node.Name):lower():match("scriptexer") then return true end
+			node = node.Parent
+			depth += 1
+		end
+		return false
+	end
+
+	local named, commaFormatted = nil, nil
+	pcall(function()
+		for _, inst in ipairs(playerGui:GetDescendants()) do
+			if (inst:IsA("TextLabel") or inst:IsA("TextButton")) and not isOurs(inst) and parseExactNumber(inst.Text) then
+				-- Prefer a label whose own name (or a nearby ancestor's)
+				-- identifies it as the Sheckles display.
+				if not named then
+					local node, depth = inst, 0
+					while node and depth < 4 do
+						if tostring(node.Name):lower():match("sheckle") then
+							named = inst
+							break
+						end
+						node = node.Parent
+						depth += 1
+					end
+				end
+				-- Otherwise fall back to any comma-formatted number, which
+				-- in practice is nearly always a currency readout.
+				if not commaFormatted and inst.Text:match("%d,%d") then
+					commaFormatted = inst
+				end
+			end
+		end
+	end)
+
+	local target = named or commaFormatted
+	if target then
+		return function() return parseExactNumber(target.Text) end, "screen text:" .. tostring(target.Name)
+	end
+	return nil
+end
+
+-- 5. A NumberValue/IntValue somewhere under the player. Deliberately
 --    excludes StringValue — a string balance is the abbreviated
 --    display form ("1.9M") and isn't exact.
 local function findViaValueObjects()
@@ -183,11 +253,15 @@ local function getCurrentSheckles()
 end
 
 task.spawn(function()
+	-- Cheapest and most likely first. The heap/upvalue scans walk tens
+	-- of thousands of objects, so running them on every one of 40
+	-- retries when a fast strategy would have worked is pure waste.
 	local strategies = {
-		{ fn = findViaHeapTables, name = "heap tables" },
-		{ fn = findViaUpvalues, name = "upvalues" },
 		{ fn = findViaAttributes, name = "attributes" },
 		{ fn = findViaValueObjects, name = "value objects" },
+		{ fn = findViaScreenText, name = "screen text" },
+		{ fn = findViaHeapTables, name = "heap tables" },
+		{ fn = findViaUpvalues, name = "upvalues" },
 	}
 
 	local attempts = 0
@@ -212,7 +286,7 @@ task.spawn(function()
 		lastSheckles = starting
 	else
 		SheckleSearchFailed = true
-		warn("[SCRIPTEXER] Couldn't find the exact Sheckles balance after trying heap tables, upvalues, player attributes and value objects for 20s. Buy still works (it doesn't need this). Stats will stay unavailable.")
+		warn("[SCRIPTEXER] Couldn't find the exact Sheckles balance after trying player attributes, value objects, on-screen text, heap tables and upvalues for 20s. Buy still works (it doesn't need this). Stats will stay unavailable.")
 	end
 end)
 

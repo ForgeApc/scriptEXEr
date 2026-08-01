@@ -582,7 +582,7 @@ local CollectEnabled = false
 local CollectEverything = true
 local CollectSelected = {} -- item name -> true
 local CollectReturn = true -- go back to where you were afterwards
-local CollectDwell = 0.15 -- seconds to linger before triggering
+local CollectDwell = 0.01 -- seconds to linger before triggering
 local CollectedCount = 0
 local CollectLast = ""
 local CollectPending = {}
@@ -1648,7 +1648,7 @@ createToggleRow(dropsPage, 60, "Collect everything dropped", CollectEverything, 
 	CollectEverything = state
 end)
 
-createSlider(dropsPage, 94, "Pickup dwell", 0.05, 2, CollectDwell, "s", function(v)
+createSlider(dropsPage, 94, "Pickup dwell", 0.01, 2, CollectDwell, "s", function(v)
 	CollectDwell = v
 end)
 

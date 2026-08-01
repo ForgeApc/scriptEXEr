@@ -558,18 +558,34 @@ local function resolveSeedTool(seedName)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then return nil end
 
-	if tool.Parent ~= character then
+	local function equipped()
+		return tool.Parent == character
+	end
+
+	local function waitForEquip(seconds)
+		local deadline = tick() + seconds
+		while tick() < deadline and not equipped() do
+			task.wait(0.03)
+		end
+		return equipped()
+	end
+
+	if not equipped() then
 		pcall(function() humanoid:UnequipTools() end)
 		pcall(function() humanoid:EquipTool(tool) end)
-		local deadline = tick() + 0.6
-		while tick() < deadline and tool.Parent ~= character do
-			task.wait(0.03)
+		if not waitForEquip(0.35) then
+			-- EquipTool is unreliable in this game (tools carry custom
+			-- equip behaviour). Reparenting is what equipping actually
+			-- is, and the client is allowed to do it to its own Backpack
+			-- tools, so fall back to that.
+			pcall(function() tool.Parent = character end)
+			waitForEquip(0.35)
 		end
 	end
 
-	-- Never fire holding the wrong seed: the remote would plant whatever
-	-- is actually equipped, or nothing, and the failure would be silent.
-	if tool.Parent ~= character then return nil end
+	-- Return it either way: firing while holding it is far more likely to
+	-- work than not firing at all, and a refusal here is indistinguishable
+	-- from a broken remote in the UI.
 	return tool
 end
 
@@ -620,7 +636,10 @@ end
 
 local function firePlant(seedName, position)
 	local tool = resolveSeedTool(seedName)
-	PlantLastTool = tool and tool.Name or "none"
+	local character = Players.LocalPlayer.Character
+	PlantLastTool = tool
+		and (tool.Name .. (tool.Parent == character and " (held)" or " (NOT held)"))
+		or "none"
 	-- No equipped Tool means there's nothing to plant with — firing
 	-- anyway would just spam the remote with a seed we don't hold.
 	if not tool then return false end

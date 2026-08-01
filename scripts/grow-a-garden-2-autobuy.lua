@@ -68,12 +68,20 @@ local function isSelected(category, name)
 end
 
 --========================================================
+-- Buy interval — shared across all three shops, adjustable live from
+-- the slider in the UI below (0.01s - 10s).
+--========================================================
+local BuyInterval = 0.5
+
+--========================================================
 -- Buy loop — one per shop, same structure as the confirmed working
--- example, gated by the Selected[] toggle state from the UI.
+-- example, gated by the Selected[] toggle state from the UI. Reads
+-- BuyInterval fresh every pass, so dragging the slider takes effect
+-- on the very next cycle.
 --========================================================
 local function runBuyLoop(stockFolder, remote, category)
 	task.spawn(function()
-		while task.wait(0.05) do
+		while task.wait(BuyInterval) do
 			for _, item in pairs(stockFolder:GetChildren()) do
 				if item and typeof(item) == "Instance" and item.Value and item.Value > 0 then
 					if isSelected(category, item.Name) and canAfford(item.Name) then
@@ -102,7 +110,7 @@ local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
-frame.Size = UDim2.new(0, 300, 0, 380)
+frame.Size = UDim2.new(0, 300, 0, 424)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
@@ -173,11 +181,100 @@ local categories = {
 local tabButtons = {}
 local activeTab = "Seeds"
 
+--========================================================
+-- Buy interval slider (0.01s – 10s)
+--========================================================
+local SLIDER_MIN, SLIDER_MAX = 0.01, 10
+
+local intervalRow = Instance.new("Frame")
+intervalRow.BackgroundTransparency = 1
+intervalRow.Position = UDim2.new(0, 16, 0, 72)
+intervalRow.Size = UDim2.new(1, -32, 0, 40)
+intervalRow.Parent = frame
+
+local intervalLabel = Instance.new("TextLabel")
+intervalLabel.BackgroundTransparency = 1
+intervalLabel.Size = UDim2.new(1, 0, 0, 16)
+intervalLabel.Font = Enum.Font.Gotham
+intervalLabel.Text = string.format("Buy interval: %.2fs", BuyInterval)
+intervalLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+intervalLabel.TextSize = 12
+intervalLabel.TextXAlignment = Enum.TextXAlignment.Left
+intervalLabel.Parent = intervalRow
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Active = true
+sliderTrack.Position = UDim2.new(0, 0, 0, 24)
+sliderTrack.Size = UDim2.new(1, 0, 0, 6)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(50, 50, 54)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = intervalRow
+
+local sliderTrackCorner = Instance.new("UICorner")
+sliderTrackCorner.CornerRadius = UDim.new(1, 0)
+sliderTrackCorner.Parent = sliderTrack
+
+local sliderFill = Instance.new("Frame")
+sliderFill.BackgroundColor3 = Color3.fromRGB(120, 255, 170)
+sliderFill.BorderSizePixel = 0
+sliderFill.Size = UDim2.new(0, 0, 1, 0)
+sliderFill.Parent = sliderTrack
+
+local sliderFillCorner = Instance.new("UICorner")
+sliderFillCorner.CornerRadius = UDim.new(1, 0)
+sliderFillCorner.Parent = sliderFill
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+sliderKnob.Size = UDim2.new(0, 14, 0, 14)
+sliderKnob.Position = UDim2.new(0, 0, 0.5, 0)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sliderKnob.BorderSizePixel = 0
+sliderKnob.ZIndex = 2
+sliderKnob.Parent = sliderTrack
+
+local sliderKnobCorner = Instance.new("UICorner")
+sliderKnobCorner.CornerRadius = UDim.new(1, 0)
+sliderKnobCorner.Parent = sliderKnob
+
+local function setIntervalFromAlpha(alpha)
+	alpha = math.clamp(alpha, 0, 1)
+	BuyInterval = SLIDER_MIN + (SLIDER_MAX - SLIDER_MIN) * alpha
+	sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
+	sliderKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	intervalLabel.Text = string.format("Buy interval: %.2fs", BuyInterval)
+end
+
+setIntervalFromAlpha((BuyInterval - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN))
+
+local draggingSlider = false
+local function alphaFromInput(input)
+	return (input.Position.X - sliderTrack.AbsolutePosition.X) / sliderTrack.AbsoluteSize.X
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = true
+		setIntervalFromAlpha(alphaFromInput(input))
+	end
+end)
+sliderTrack.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = false
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		setIntervalFromAlpha(alphaFromInput(input))
+	end
+end)
+
 -- List area (shared between tabs — rebuilt on tab switch)
 local listHolder = Instance.new("ScrollingFrame")
 listHolder.BackgroundTransparency = 1
-listHolder.Position = UDim2.new(0, 16, 0, 74)
-listHolder.Size = UDim2.new(1, -32, 1, -122)
+listHolder.Position = UDim2.new(0, 16, 0, 122)
+listHolder.Size = UDim2.new(1, -32, 1, -170)
 listHolder.CanvasSize = UDim2.new(0, 0, 0, 0)
 listHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
 listHolder.ScrollBarThickness = 3

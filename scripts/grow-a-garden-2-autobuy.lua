@@ -179,7 +179,7 @@ local categories = {
 }
 
 local tabButtons = {}
-local activeTab = "Seeds"
+local activeTab = "All"
 
 --========================================================
 -- Buy interval slider (0.01s – 10s)
@@ -327,7 +327,12 @@ local selectNoneBtn = pillButton(bulkRow, "None", 90)
 local rowEntries = {} -- current tab's row instances, for bulk toggling
 local rowConnections = {} -- stock .Value change connections, disconnected on every rebuild
 
-local function buildList(category)
+-- "All" shows every item from every shop in one combined list, each
+-- still tagged with (and toggled against) its real category — Seeds
+-- buy loop only ever reads Selected["Seeds"], etc., so toggling an
+-- item from the All tab does exactly the same thing as toggling it
+-- from its own shop's tab.
+local function buildList(tab)
 	for _, child in ipairs(listHolder:GetChildren()) do
 		if child:IsA("Frame") then child:Destroy() end
 	end
@@ -338,23 +343,30 @@ local function buildList(category)
 	end
 	rowConnections = {}
 
-	local cat = nil
-	for _, c in ipairs(categories) do
-		if c.key == category then cat = c break end
-	end
-	if not cat then return end
+	local showAll = tab == "All"
 
-	-- Every item that exists in the shop's stock folder, whether it's
+	-- Every item that exists in each shop's stock folder, whether it's
 	-- currently in stock or not — filtering by current stock would mean
 	-- items disappear from the list the moment they sell out.
 	local items = {}
-	for _, item in ipairs(cat.stock:GetChildren()) do
-		table.insert(items, item)
+	for _, cat in ipairs(categories) do
+		if showAll or cat.key == tab then
+			for _, item in ipairs(cat.stock:GetChildren()) do
+				table.insert(items, { instance = item, category = cat.key })
+			end
+		end
 	end
-	table.sort(items, function(a, b) return a.Name < b.Name end)
+	table.sort(items, function(a, b)
+		if showAll and a.category ~= b.category then
+			return a.category < b.category
+		end
+		return a.instance.Name < b.instance.Name
+	end)
 
-	for _, item in ipairs(items) do
+	for _, entry in ipairs(items) do
+		local item = entry.instance
 		local name = item.Name
+		local realCategory = entry.category
 
 		local row = Instance.new("Frame")
 		row.Size = UDim2.new(1, 0, 0, 28)
@@ -369,7 +381,7 @@ local function buildList(category)
 		local label = Instance.new("TextLabel")
 		label.BackgroundTransparency = 1
 		label.Position = UDim2.new(0, 10, 0, 0)
-		label.Size = UDim2.new(1, -128, 1, 0)
+		label.Size = UDim2.new(1, showAll and -168 or -128, 1, 0)
 		label.Font = Enum.Font.Gotham
 		label.Text = name
 		label.TextColor3 = Color3.fromRGB(230, 230, 235)
@@ -377,6 +389,19 @@ local function buildList(category)
 		label.TextXAlignment = Enum.TextXAlignment.Left
 		label.TextTruncate = Enum.TextTruncate.AtEnd
 		label.Parent = row
+
+		if showAll then
+			local tag = Instance.new("TextLabel")
+			tag.BackgroundTransparency = 1
+			tag.Position = UDim2.new(1, -158, 0, 0)
+			tag.Size = UDim2.new(0, 44, 1, 0)
+			tag.Font = Enum.Font.GothamBold
+			tag.Text = realCategory
+			tag.TextColor3 = Color3.fromRGB(150, 150, 155)
+			tag.TextSize = 10
+			tag.TextXAlignment = Enum.TextXAlignment.Left
+			tag.Parent = row
+		end
 
 		local stockLabel = Instance.new("TextLabel")
 		stockLabel.BackgroundTransparency = 1
@@ -407,7 +432,7 @@ local function buildList(category)
 		knobCorner.Parent = knob
 
 		local function paint()
-			local on = isSelected(category, name)
+			local on = isSelected(realCategory, name)
 			toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
 			knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
 			knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
@@ -423,23 +448,23 @@ local function buildList(category)
 		table.insert(rowConnections, item:GetPropertyChangedSignal("Value"):Connect(paintStock))
 
 		toggle.MouseButton1Click:Connect(function()
-			Selected[category][name] = not isSelected(category, name)
+			Selected[realCategory][name] = not isSelected(realCategory, name)
 			paint()
 		end)
 
-		table.insert(rowEntries, { name = name, paint = paint })
+		table.insert(rowEntries, { name = name, category = realCategory, paint = paint })
 	end
 end
 
 selectAllBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(rowEntries) do
-		Selected[activeTab][entry.name] = true
+		Selected[entry.category][entry.name] = true
 		entry.paint()
 	end
 end)
 selectNoneBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(rowEntries) do
-		Selected[activeTab][entry.name] = false
+		Selected[entry.category][entry.name] = false
 		entry.paint()
 	end
 end)
@@ -452,13 +477,14 @@ local function paintTabs()
 	end
 end
 
-for _, cat in ipairs(categories) do
-	local btn = pillButton(tabBar, cat.key, 80)
-	tabButtons[cat.key] = btn
+local tabKeys = { "All", "Seeds", "Gears", "Crates" }
+for _, key in ipairs(tabKeys) do
+	local btn = pillButton(tabBar, key, 60)
+	tabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
-		activeTab = cat.key
+		activeTab = key
 		paintTabs()
-		buildList(cat.key)
+		buildList(key)
 	end)
 end
 

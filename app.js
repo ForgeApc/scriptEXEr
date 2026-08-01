@@ -37,12 +37,29 @@
 
   /* Universal Loader — detects the current game via PlaceId and runs
      the best matching script from the SCRIPTEXER catalog. Mirrors loader.lua. */
-  const LOADER_SCRIPT = `local SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co"
+  const LOADER_SCRIPT = `--[[
+  SCRIPTEXER — Universal Loader
+  Detects the Roblox game you're currently in (via game.PlaceId), shows
+  a small clean HUD in the top-right corner, and runs the best matching
+  script from the SCRIPTEXER catalog. A Switch button cycles through
+  every script registered for that game, stopping the current one first.
+
+  Every script's code is fetched live from the SCRIPTEXER database each
+  time you launch or switch — nothing is ever bundled into this loader.
+
+  Usage: paste this whole script into your executor and run it.
+--]]
+
+local SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co"
 local ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzY2F6dHR2aGd3YXF4a2RwaHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MzI0NTYsImV4cCI6MjEwMTEwODQ1Nn0.WWKLNM6ZQZKF2DVne0diOaT3ZB7apbbbuk1lTH-b4L8"
 
 local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
 local placeId = game.PlaceId
 
+--========================================================
+-- Networking
+--========================================================
 local function httpGet(url)
 \tlocal ok, res = pcall(function()
 \t\treturn game:HttpGet(url)
@@ -59,6 +76,7 @@ local function httpGet(url)
 \treturn nil
 end
 
+-- Turns "1.2M" / "847K" / "312" into a comparable number.
 local function parseDownloads(s)
 \tif not s then return 0 end
 \tlocal num, suffix = s:match("([%d%.]+)%s*([KMB]?)")
@@ -69,7 +87,162 @@ local function parseDownloads(s)
 \treturn num
 end
 
-warn("[SCRIPTEXER] Detecting game (PlaceId: " .. tostring(placeId) .. ")...")
+--========================================================
+-- UI — minimal dark HUD, top-right corner, draggable
+--========================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "ScriptexerLoaderUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+
+local frame = Instance.new("Frame")
+frame.Name = "Panel"
+frame.AnchorPoint = Vector2.new(1, 0)
+frame.Position = UDim2.new(1, -18, 0, 18)
+frame.Size = UDim2.new(0, 260, 0, 96)
+frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+frame.BackgroundTransparency = 0.06
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 14)
+corner.Parent = frame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(255, 255, 255)
+stroke.Transparency = 0.88
+stroke.Thickness = 1
+stroke.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.BackgroundTransparency = 1
+title.Position = UDim2.new(0, 14, 0, 10)
+title.Size = UDim2.new(1, -28, 0, 18)
+title.Font = Enum.Font.GothamBold
+title.Text = "⚡ SCRIPTEXER"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 14
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Name = "Status"
+status.BackgroundTransparency = 1
+status.Position = UDim2.new(0, 14, 0, 30)
+status.Size = UDim2.new(1, -28, 0, 32)
+status.Font = Enum.Font.Gotham
+status.Text = "Detecting game..."
+status.TextColor3 = Color3.fromRGB(190, 190, 190)
+status.TextSize = 12
+status.TextWrapped = true
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextYAlignment = Enum.TextYAlignment.Top
+status.Parent = frame
+
+local switchBtn = Instance.new("TextButton")
+switchBtn.Name = "SwitchButton"
+switchBtn.Position = UDim2.new(0, 14, 1, -34)
+switchBtn.Size = UDim2.new(1, -28, 0, 24)
+switchBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+switchBtn.AutoButtonColor = false
+switchBtn.Font = Enum.Font.GothamBold
+switchBtn.Text = "Switch Script"
+switchBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+switchBtn.TextSize = 12
+switchBtn.Visible = false
+switchBtn.Parent = frame
+
+local switchCorner = Instance.new("UICorner")
+switchCorner.CornerRadius = UDim.new(1, 0)
+switchCorner.Parent = switchBtn
+
+switchBtn.MouseEnter:Connect(function()
+\tswitchBtn.BackgroundColor3 = Color3.fromRGB(210, 210, 210)
+end)
+switchBtn.MouseLeave:Connect(function()
+\tswitchBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+end)
+
+-- Drag support
+do
+\tlocal dragging, dragStart, startPos = false, nil, nil
+\ttitle.Size = UDim2.new(1, -28, 0, 18)
+\tframe.Active = true
+\tframe.InputBegan:Connect(function(input)
+\t\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+\t\t\tdragging = true
+\t\t\tdragStart = input.Position
+\t\t\tstartPos = frame.Position
+\t\t\tinput.Changed:Connect(function()
+\t\t\t\tif input.UserInputState == Enum.UserInputState.End then dragging = false end
+\t\t\tend)
+\t\tend
+\tend)
+\tUserInputService.InputChanged:Connect(function(input)
+\t\tif dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+\t\t\tlocal delta = input.Position - dragStart
+\t\t\tframe.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+\t\tend
+\tend)
+end
+
+local function setStatus(text)
+\tstatus.Text = text
+end
+
+--========================================================
+-- Script catalog + execution
+--========================================================
+local matchedGame = nil
+local scripts = {}
+local currentIndex = 0
+local currentThread = nil
+
+-- Stops the currently running script before switching. This closes the
+-- coroutine it's running in, which halts it the next time it yields
+-- (e.g. on wait()/task.wait()) — the best generic "unload" available
+-- for arbitrary injected scripts without their cooperation.
+local function stopCurrent()
+\tif currentThread and coroutine.status(currentThread) ~= "dead" then
+\t\tpcall(coroutine.close, currentThread)
+\tend
+\tcurrentThread = nil
+end
+
+local function runScriptAt(index)
+\tstopCurrent()
+\tlocal s = scripts[index]
+\tif not s then return end
+\tcurrentIndex = index
+\tsetStatus("Running: " .. s.title)
+
+\tcurrentThread = coroutine.create(function()
+\t\tlocal ok, err = pcall(function()
+\t\t\tloadstring(s.loadstring)()
+\t\tend)
+\t\tif not ok then
+\t\t\tsetStatus("Failed: " .. s.title .. " — " .. tostring(err))
+\t\tend
+\tend)
+\tcoroutine.resume(currentThread)
+end
+
+local function switchScript()
+\tif #scripts <= 1 then return end
+\tlocal nextIndex = currentIndex + 1
+\tif nextIndex > #scripts then nextIndex = 1 end
+\trunScriptAt(nextIndex)
+end
+
+switchBtn.MouseButton1Click:Connect(switchScript)
+
+--========================================================
+-- Boot — fetch game + its scripts live from Supabase
+--========================================================
+setStatus("Detecting game (PlaceId " .. tostring(placeId) .. ")...")
 
 local gamesUrl = string.format(
 \t"%s/rest/v1/games?place_id=eq.%d&select=id,name&apikey=%s",
@@ -77,19 +250,18 @@ local gamesUrl = string.format(
 )
 local gamesBody = httpGet(gamesUrl)
 if not gamesBody then
-\twarn("[SCRIPTEXER] Couldn't reach the script database. Check your internet connection.")
+\tsetStatus("Couldn't reach the script database. Check your internet connection.")
 \treturn
 end
 
 local okGames, games = pcall(function() return HttpService:JSONDecode(gamesBody) end)
 if not okGames or #games == 0 then
-\twarn("[SCRIPTEXER] No scripts registered for this game yet (PlaceId: " .. tostring(placeId) .. ").")
-\twarn("[SCRIPTEXER] Browse scripts manually at your SCRIPTEXER site.")
+\tsetStatus("No scripts registered for this game yet.")
 \treturn
 end
 
-local matchedGame = games[1]
-warn("[SCRIPTEXER] Game detected: " .. matchedGame.name)
+matchedGame = games[1]
+setStatus("Script for " .. matchedGame.name .. " launching...")
 
 local scriptsUrl = string.format(
 \t"%s/rest/v1/scripts?game_id=eq.%s&select=title,loadstring,verified,downloads&apikey=%s",
@@ -97,32 +269,28 @@ local scriptsUrl = string.format(
 )
 local scriptsBody = httpGet(scriptsUrl)
 if not scriptsBody then
-\twarn("[SCRIPTEXER] Failed to fetch scripts for " .. matchedGame.name)
+\tsetStatus("Failed to fetch scripts for " .. matchedGame.name)
 \treturn
 end
 
-local okScripts, scripts = pcall(function() return HttpService:JSONDecode(scriptsBody) end)
-if not okScripts or #scripts == 0 then
-\twarn("[SCRIPTEXER] " .. matchedGame.name .. " has no scripts uploaded yet.")
+local okScripts, fetchedScripts = pcall(function() return HttpService:JSONDecode(scriptsBody) end)
+if not okScripts or #fetchedScripts == 0 then
+\tsetStatus(matchedGame.name .. " has no scripts uploaded yet.")
 \treturn
 end
 
-table.sort(scripts, function(a, b)
+-- Prefer verified scripts, then the highest download count.
+table.sort(fetchedScripts, function(a, b)
 \tif a.verified ~= b.verified then
 \t\treturn a.verified
 \tend
 \treturn parseDownloads(a.downloads) > parseDownloads(b.downloads)
 end)
+scripts = fetchedScripts
 
-local chosen = scripts[1]
-warn("[SCRIPTEXER] Running: " .. chosen.title)
-
-local ok, err = pcall(function()
-\tloadstring(chosen.loadstring)()
-end)
-if not ok then
-\twarn("[SCRIPTEXER] Script failed to run: " .. tostring(err))
-end`;
+switchBtn.Visible = #scripts > 1
+runScriptAt(1)
+`;
 
   /* Build a single exploit card markup. Shared by viewGame and live filtering. */
   function exploitCardHtml(game, e) {

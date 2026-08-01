@@ -509,33 +509,67 @@ pcall(function()
 	end)
 end)
 
-local function fireWithOrder(order, seedName, position)
-	if order == "pos_first" then
-		return pcall(function() PlantSeed:Fire(position, seedName) end)
-	end
-	return pcall(function() PlantSeed:Fire(seedName, position) end)
+-- How many arguments the remote actually takes. The Networking module
+-- carries one serializer per argument in .Writes, so its length is the
+-- arity — a fact, not a guess. Worlds added later (Maple) turned out to
+-- differ here, which is why probing only the ORDER of two arguments was
+-- never going to be enough.
+local PlantArity = nil
+pcall(function()
+	local writes = PlantSeed.Writes
+	if type(writes) == "table" then PlantArity = #writes end
+end)
+
+-- Every plausible shape, each labelled so the winner can be shown in the
+-- UI. Built per-call because they close over the actual values.
+local function plantCandidates(seedName, position)
+	local cf = CFrame.new(position)
+	local plot = OwnerPlot
+	return {
+		{ name = "pos_first", args = { position, seedName } },
+		{ name = "name_first", args = { seedName, position } },
+		{ name = "name_cf", args = { seedName, cf } },
+		{ name = "cf_first", args = { cf, seedName } },
+		{ name = "name_pos_plot", args = { seedName, position, plot } },
+		{ name = "plot_name_pos", args = { plot, seedName, position } },
+		{ name = "name_pos_rot", args = { seedName, position, 0 } },
+		{ name = "name_cf_plot", args = { seedName, cf, plot } },
+		{ name = "pos_only", args = { position } },
+		{ name = "name_only", args = { seedName } },
+	}
+end
+
+local function fireCandidate(candidate)
+	return pcall(function() PlantSeed:Fire(table.unpack(candidate.args)) end)
 end
 
 local function firePlant(seedName, position)
+	local candidates = plantCandidates(seedName, position)
+
 	if PlantArgOrder then
-		return fireWithOrder(PlantArgOrder, seedName, position)
+		for _, candidate in ipairs(candidates) do
+			if candidate.name == PlantArgOrder then return fireCandidate(candidate) end
+		end
 	end
 
-	-- Order still unknown. pcall success alone is NOT proof the order
-	-- was right — the remote may accept mismatched arguments happily
-	-- and simply do nothing server-side, which would have locked in a
-	-- silently broken order forever. So each candidate is confirmed
-	-- against PlantAdded before being committed to.
-	for _, order in ipairs({ "pos_first", "name_first" }) do
-		local before = PlantConfirmedCount
-		if fireWithOrder(order, seedName, position) then
-			local deadline = tick() + 1
-			while tick() < deadline do
-				if PlantConfirmedCount > before then
-					PlantArgOrder = order
-					return true
+	-- Shape still unknown. pcall success alone is NOT proof it was right
+	-- — the remote may accept mismatched arguments happily and simply do
+	-- nothing server-side, which would lock in a silently broken shape
+	-- forever. So each candidate is confirmed against PlantAdded before
+	-- being committed to. When the arity is known, candidates that don't
+	-- match it are skipped outright.
+	for _, candidate in ipairs(candidates) do
+		if not PlantArity or #candidate.args == PlantArity then
+			local before = PlantConfirmedCount
+			if fireCandidate(candidate) then
+				local deadline = tick() + 0.6
+				while tick() < deadline do
+					if PlantConfirmedCount > before then
+						PlantArgOrder = candidate.name
+						return true
+					end
+					task.wait(0.05)
 				end
-				task.wait(0.05)
 			end
 		end
 	end
@@ -1552,8 +1586,8 @@ task.spawn(function()
 			-- Requests are going out but the game never reported a plant:
 			-- wrong spot, no seeds, or this world rejects it.
 			plantStatusLabel.Text = string.format(
-				"Sent %d requests, none planted — check you're on plantable ground with those seeds.",
-				PlantFiredCount
+				"Sent %d requests (remote takes %s args), none planted — check you're on plantable ground with those seeds.",
+				PlantFiredCount, PlantArity and tostring(PlantArity) or "?"
 			)
 			plantStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		elseif PlantMode == "fixed" and not PlantFixedPosition then

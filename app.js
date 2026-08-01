@@ -643,19 +643,22 @@ runScriptAt(1)
   }
 
   // UNIVERSAL LOADER
+  const LOADER_URL = "https://cdn.jsdelivr.net/gh/ForgeApc/scriptEXEr@main/loader.lua";
+  const LOADER_LOADSTRING = `loadstring(game:HttpGet("${LOADER_URL}"))()`;
+
   function viewLoader() {
     return `
       <section class="view">
         <div class="page-hero">
           <span class="eyebrow">SCRIPTEXER · Tools</span>
           <h1>Universal Loader</h1>
-          <p>One script for every game. Paste it into your executor — it detects which Roblox game you're in and automatically runs the best script for it.</p>
+          <p>One line for every game. Paste it into your executor — it detects which Roblox game you're in and automatically runs the best script for it.</p>
         </div>
 
         <div class="detail-panel glass">
-          <h2>How it works</h2>
+          <h2>Loadstring</h2>
           <p style="margin-bottom:14px;color:var(--text-dim);font-size:0.88rem">
-            The loader reads <code>game.PlaceId</code>, looks it up against the SCRIPTEXER catalog, and runs the verified script with the most downloads for that game. If a game has no scripts yet, it'll tell you instead of failing silently.
+            Paste this single line into your executor and press Execute. It fetches the latest loader straight from SCRIPTEXER every time you run it.
           </p>
           <div class="code-block">
             <div class="code-block-header">
@@ -663,13 +666,20 @@ runScriptAt(1)
                 <span class="code-dots"><span></span><span></span><span></span></span>
                 Lua
               </span>
-              <button class="copy-btn" id="loaderCopyBtn" aria-label="Copy loader script">
+              <button class="copy-btn" id="loaderLoadstringCopyBtn" aria-label="Copy loadstring">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span class="copy-label">Copy</span>
               </button>
             </div>
-            <pre><code id="loaderCode">${highlightLoadstring(LOADER_SCRIPT)}</code></pre>
+            <pre><code id="loaderLoadstringCode">${highlightLoadstring(LOADER_LOADSTRING)}</code></pre>
           </div>
+        </div>
+
+        <div class="detail-panel glass">
+          <h2>How it works</h2>
+          <p style="margin-bottom:14px;color:var(--text-dim);font-size:0.88rem">
+            The loader reads <code>game.PlaceId</code>, looks it up against the SCRIPTEXER catalog, and runs the verified script with the most downloads for that game. If a game has no scripts yet, it'll tell you instead of failing silently.
+          </p>
         </div>
 
         <div class="detail-panel glass">
@@ -679,6 +689,28 @@ runScriptAt(1)
             <li>Stable internet connection</li>
             <li>The game must have at least one script added on the admin panel, with its Roblox Place ID set</li>
           </ul>
+        </div>
+
+        <div class="detail-panel glass">
+          <div class="code-block-header" style="margin-bottom:12px">
+            <h2 style="margin:0">Full source</h2>
+            <button class="copy-btn" id="loaderCopyBtn" aria-label="Copy loader script">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span class="copy-label">Copy</span>
+            </button>
+          </div>
+          <p style="margin-bottom:14px;color:var(--text-dim);font-size:0.88rem">
+            This is exactly what the loadstring above fetches and runs — nothing hidden. Read it, or paste it directly into your executor instead of using the loadstring.
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-label">
+                <span class="code-dots"><span></span><span></span><span></span></span>
+                Lua
+              </span>
+            </div>
+            <pre><code id="loaderCode">${highlightLoadstring(LOADER_SCRIPT)}</code></pre>
+          </div>
         </div>
       </section>`;
   }
@@ -1448,6 +1480,25 @@ runScriptAt(1)
           showToast("Loader script copied to clipboard");
           setTimeout(() => {
             loaderCopyBtn.classList.remove("copied");
+            if (label) label.textContent = "Copy";
+          }, 1800);
+        } else {
+          showToast("Copy failed — select and copy manually");
+        }
+      });
+    }
+
+    const loaderLoadstringCopyBtn = document.getElementById("loaderLoadstringCopyBtn");
+    if (loaderLoadstringCopyBtn) {
+      loaderLoadstringCopyBtn.addEventListener("click", async () => {
+        const ok = await copyText(LOADER_LOADSTRING);
+        const label = loaderLoadstringCopyBtn.querySelector(".copy-label");
+        if (ok) {
+          loaderLoadstringCopyBtn.classList.add("copied");
+          if (label) label.textContent = "Copied!";
+          showToast("Loadstring copied to clipboard");
+          setTimeout(() => {
+            loaderLoadstringCopyBtn.classList.remove("copied");
             if (label) label.textContent = "Copy";
           }, 1800);
         } else {

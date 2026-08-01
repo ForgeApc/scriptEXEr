@@ -3,9 +3,12 @@
   Clean, readable, no obfuscation, no external network calls beyond the
   game's own remotes. Everything it does is visible below.
 
-  Four tabs:
+  Tabs:
     Buy     — toggle exactly which seeds/gears/crates get auto-bought,
               item lists built live from the game's own stock folders
+    Plant   — auto-plants selected seeds at you, randomly across your
+              plot, or at one pinned spot
+    Drops   — teleports to dropped items and holds E to pick them up
     Harvest — auto-harvests fruit, ripe ones first, then attempts
               still-growing ones too
     Sell    — auto-sells your inventory on an adjustable delay
@@ -561,22 +564,25 @@ end)
 -- DROPS — teleports to dropped items the moment they appear.
 --
 -- The Networking dump has DroppedItem.PickupFx and RequestDrop but no
--- "pick this up" remote, so collection is proximity-based: you have to
--- physically be at the item. That means teleporting rather than firing
--- something.
+-- "pick this up" remote, so collection is proximity-based: you hold E
+-- on a ProximityPrompt. That means teleporting to it and triggering
+-- the prompt, not firing a remote.
 --
--- Detection is event-driven (Workspace.DescendantAdded) rather than
--- polling a known folder, because nothing in the dump reveals where
--- drops get parented — and "as soon as it drops" is exactly what an
--- Added signal gives you, with no guessing about container names.
+-- Detection watches for ProximityPrompts specifically, rather than any
+-- new Model/BasePart. That's both more precise and much safer: an
+-- earlier version matched every instance streamed into Workspace,
+-- which with "collect everything" on would have teleported you to
+-- essentially every part that loaded. Requiring a prompt means we only
+-- ever target things that are genuinely pick-up-able, and it needs no
+-- guesswork about which folder drops live in.
 --========================================================
 local Workspace = game:GetService("Workspace")
 
 local CollectEnabled = false
 local CollectEverything = true
-local CollectSelected = {} -- seed/item name -> true
+local CollectSelected = {} -- item name -> true
 local CollectReturn = true -- go back to where you were afterwards
-local CollectDwell = 0.35 -- seconds to linger so the pickup registers
+local CollectDwell = 0.15 -- seconds to linger before triggering
 local CollectedCount = 0
 local CollectLast = ""
 local CollectPending = {}
@@ -593,12 +599,14 @@ local function countCollectSelected()
 	return n
 end
 
--- Substring match, so "Gold Carrot" is caught by a "Gold" filter.
-local function matchesCollectFilter(instanceName)
+-- Exact (case-insensitive) name match. Gold / Rainbow / Mega are their
+-- own distinct seeds here, not mutation prefixes on other seeds, so
+-- substring matching would wrongly rope in unrelated items.
+local function matchesCollectFilter(name)
 	if CollectEverything then return true end
-	local lower = tostring(instanceName):lower()
-	for name, on in pairs(CollectSelected) do
-		if on and lower:find(tostring(name):lower(), 1, true) then
+	local lower = tostring(name):lower()
+	for selected, on in pairs(CollectSelected) do
+		if on and tostring(selected):lower() == lower then
 			return true
 		end
 	end
@@ -610,42 +618,60 @@ local function getRoot()
 	return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function getInstancePosition(inst)
-	if inst:IsA("BasePart") then return inst.Position end
-	if inst:IsA("Model") then
-		local primary = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
-		if primary then return primary.Position end
+-- What to call a prompt's item, for filtering and for the status line.
+local function promptName(prompt)
+	if prompt.ObjectText and prompt.ObjectText ~= "" then
+		return prompt.ObjectText
+	end
+	local parent = prompt.Parent
+	return parent and parent.Name or "?"
+end
+
+local function promptPosition(prompt)
+	local node = prompt.Parent
+	local depth = 0
+	while node and depth < 4 do
+		if node:IsA("BasePart") then return node.Position end
+		if node:IsA("Model") then
+			local part = node.PrimaryPart or node:FindFirstChildWhichIsA("BasePart")
+			if part then return part.Position end
+		end
+		node = node.Parent
+		depth += 1
 	end
 	return nil
 end
 
--- Some games gate pickup behind a ProximityPrompt rather than a plain
--- touch. Firing it costs nothing when there isn't one.
-local function firePrompts(inst)
-	if not fireproximityprompt then return end
+-- Zeroing HoldDuration is what makes "hold E" instant. InputHoldBegin/
+-- InputHoldEnd are ordinary LocalScript APIs, so this works even on
+-- executors without fireproximityprompt — that's only the fallback.
+local function triggerPrompt(prompt)
 	pcall(function()
-		for _, descendant in ipairs(inst:GetDescendants()) do
-			if descendant:IsA("ProximityPrompt") then
-				fireproximityprompt(descendant)
-			end
-		end
-		if inst:IsA("ProximityPrompt") then
-			fireproximityprompt(inst)
-		end
+		prompt.HoldDuration = 0
+		prompt.Enabled = true
+		prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, 50)
 	end)
+	local ok = pcall(function()
+		prompt:InputHoldBegin()
+		task.wait()
+		prompt:InputHoldEnd()
+	end)
+	if not ok and fireproximityprompt then
+		pcall(fireproximityprompt, prompt)
+	end
 end
 
-local function collectDrop(target)
-	if not target or not target.Parent then return false end
+local function collectDrop(prompt)
+	if not prompt or not prompt.Parent then return false end
 	local root = getRoot()
 	if not root then return false end
-	local position = getInstancePosition(target)
+	local position = promptPosition(prompt)
 	if not position then return false end
 
 	local origin = root.CFrame
 	root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
 	task.wait(CollectDwell)
-	firePrompts(target)
+	triggerPrompt(prompt)
 
 	if CollectReturn then
 		local rootNow = getRoot()
@@ -655,11 +681,11 @@ local function collectDrop(target)
 end
 
 Workspace.DescendantAdded:Connect(function(inst)
-	-- Deliberately cheap: this fires constantly as parts stream in, so
-	-- bail out before doing any string work whenever collection is off.
+	-- Cheapest possible early-out: this fires constantly as parts
+	-- stream in, and the class check rejects almost everything.
 	if not CollectEnabled then return end
-	if not (inst:IsA("Model") or inst:IsA("BasePart")) then return end
-	if not matchesCollectFilter(inst.Name) then return end
+	if not inst:IsA("ProximityPrompt") then return end
+	if not matchesCollectFilter(promptName(inst)) then return end
 	table.insert(CollectPending, inst)
 end)
 
@@ -667,10 +693,12 @@ task.spawn(function()
 	while task.wait(0.05) do
 		if CollectEnabled and #CollectPending > 0 then
 			local target = table.remove(CollectPending, 1)
+			local name = "?"
+			pcall(function() name = promptName(target) end)
 			local ok, collected = pcall(collectDrop, target)
 			if ok and collected then
 				CollectedCount += 1
-				CollectLast = target.Name
+				CollectLast = name
 			end
 		elseif #CollectPending > 0 then
 			-- Disabled mid-queue; don't teleport to stale targets later.
@@ -1629,7 +1657,7 @@ dropsStatusLabel.BackgroundTransparency = 1
 dropsStatusLabel.Position = UDim2.new(0, 16, 0, 138)
 dropsStatusLabel.Size = UDim2.new(1, -32, 0, 28)
 dropsStatusLabel.Font = Enum.Font.Gotham
-dropsStatusLabel.Text = "Teleports to drops the instant they appear."
+dropsStatusLabel.Text = "Teleports to drops and holds E for you."
 dropsStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 dropsStatusLabel.TextSize = 11
 dropsStatusLabel.TextWrapped = true
@@ -1649,7 +1677,7 @@ task.spawn(function()
 			dropsStatusLabel.Text = "Watching for drops…"
 			dropsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
 		else
-			dropsStatusLabel.Text = "Teleports to drops the instant they appear."
+			dropsStatusLabel.Text = "Teleports to drops and holds E for you."
 			dropsStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
 		end
 	end
@@ -1688,8 +1716,9 @@ local dropsRowEntries = {}
 
 do
 	-- Filter names come from the live seed stock, same as everywhere
-	-- else, so they're real in-game names rather than guesses. Matching
-	-- is substring-based, so selecting "Gold" also catches "Gold Apple".
+	-- else, so they're real in-game names rather than guesses. Matched
+	-- exactly — Gold, Rainbow and Mega are their own seeds, not
+	-- prefixes on other seeds.
 	local names = {}
 	for _, item in ipairs(SeedsStock:GetChildren()) do
 		table.insert(names, item.Name)

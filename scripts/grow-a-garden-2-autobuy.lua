@@ -547,10 +547,18 @@ local function resolveSeedTool(seedName)
 	end
 
 	local tool = match(character) or match(backpack)
-	if tool and character then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid and tool.Parent ~= character then
-			pcall(function() humanoid:EquipTool(tool) end)
+	if not tool or not character then return tool end
+
+	-- The captured call passes the Tool as it lives under the CHARACTER
+	-- (Workspace.<player>.<tool>), i.e. equipped. Equipping is not
+	-- instant, so wait for the reparent rather than firing at a Tool the
+	-- server still sees sitting in the Backpack.
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid and tool.Parent ~= character then
+		pcall(function() humanoid:EquipTool(tool) end)
+		local deadline = tick() + 0.5
+		while tick() < deadline and tool.Parent ~= character do
+			task.wait(0.03)
 		end
 	end
 	return tool
@@ -562,7 +570,10 @@ local function plantCandidates(seedName, position, tool)
 	local cf = CFrame.new(position)
 	local plot = OwnerPlot
 	return {
-		-- 3-arg shapes first: that's this world's measured arity.
+		-- The real shape, captured off the game's own call with a hook on
+		-- PlantSeed.Fire: (Vector3, seed name, the equipped Tool).
+		{ name = "pos_name_tool", args = { position, seedName, tool }, n = 3 },
+		-- Everything below is fallback for other worlds.
 		{ name = "name_pos_plot", args = { seedName, position, plot } },
 		{ name = "plot_name_pos", args = { plot, seedName, position } },
 		{ name = "name_pos_rot", args = { seedName, position, 0 } },
@@ -586,8 +597,16 @@ local function plantCandidates(seedName, position, tool)
 	}
 end
 
+-- Argument counts are declared explicitly: a nil in the list (no plot
+-- resolved yet, no Tool found) would otherwise shorten it silently and
+-- make a 3-arg shape look like a 2-arg one.
+local function argCount(candidate)
+	return candidate.n or #candidate.args
+end
+
 local function fireCandidate(candidate)
-	return pcall(function() PlantSeed:Fire(table.unpack(candidate.args)) end)
+	local n = argCount(candidate)
+	return pcall(function() PlantSeed:Fire(table.unpack(candidate.args, 1, n)) end)
 end
 
 local function firePlant(seedName, position)
@@ -610,7 +629,7 @@ local function firePlant(seedName, position)
 	-- being committed to. When the arity is known, candidates that don't
 	-- match it are skipped outright.
 	for _, candidate in ipairs(candidates) do
-		if not PlantArity or #candidate.args == PlantArity then
+		if not PlantArity or argCount(candidate) == PlantArity then
 			local before = PlantConfirmedCount
 			if fireCandidate(candidate) then
 				local deadline = tick() + 0.6

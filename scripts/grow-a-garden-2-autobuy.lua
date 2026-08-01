@@ -105,6 +105,16 @@ end
 
 local PlayerDataSearchFailed = false
 
+-- Exact number only — no leaderstats fallback. If this never resolves,
+-- Stats stays honestly unavailable rather than showing an approximate
+-- number silently rounded to whatever leaderstats displays.
+local function getCurrentSheckles()
+	if playerdata and playerdata.Data and type(playerdata.Data.Sheckles) == "number" then
+		return playerdata.Data.Sheckles
+	end
+	return nil
+end
+
 task.spawn(function()
 	local attempts = 0
 	while not playerdata and attempts < 40 do
@@ -113,13 +123,13 @@ task.spawn(function()
 		attempts += 1
 		task.wait(0.5)
 	end
-	if playerdata and playerdata.Data then
+	if playerdata and playerdata.Data and type(playerdata.Data.Sheckles) == "number" then
 		StatsStartTime = tick()
-		StatsStartingSheckles = playerdata.Data.Sheckles or 0
+		StatsStartingSheckles = playerdata.Data.Sheckles
 		lastSheckles = StatsStartingSheckles
-	elseif not playerdata then
+	else
 		PlayerDataSearchFailed = true
-		warn("[SCRIPTEXER] Couldn't find the game's price/currency data after retrying for 20s. Buy affordability checks and Stats tracking will stay disabled. This usually means getgc()/debug.getupvalue() aren't supported by your executor, or the game's shop controller structure has changed.")
+		warn("[SCRIPTEXER] Couldn't find the exact Sheckles value after retrying for 20s. Buy still works (it no longer needs this). Stats tracking will stay disabled.")
 	end
 end)
 
@@ -1031,14 +1041,11 @@ local function refreshStatsUI()
 
 	if not StatsStartingSheckles then
 		if PlayerDataSearchFailed then
-			statsStatusLabel.Text = "Not found — see console for [SCRIPTEXER] warning"
+			statsStatusLabel.Text = "Exact Sheckles value not found — Stats unavailable"
 			statsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
-		elseif playerdata == nil then
+		else
 			statsStatusLabel.Text = "Detecting game data..."
 			statsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
-		else
-			statsStatusLabel.Text = "Game data found, but no Sheckles field — can't track"
-			statsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		end
 		earnedValue.Text = "—"
 		spentValue.Text = "—"
@@ -1072,8 +1079,8 @@ end
 
 task.spawn(function()
 	while task.wait(1) do
-		if playerdata and playerdata.Data and lastSheckles then
-			local current = playerdata.Data.Sheckles or lastSheckles
+		local current = getCurrentSheckles()
+		if current and lastSheckles then
 			local delta = current - lastSheckles
 			if delta > 0 then
 				TotalEarned += delta

@@ -8,7 +8,7 @@ local gui = Instance.new("ScreenGui")
 gui.Name = "ScriptexerDiagUI"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
 frame.AnchorPoint = Vector2.new(0.5, 0.5)

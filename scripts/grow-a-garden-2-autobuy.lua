@@ -103,6 +103,8 @@ local function tryFindPlayerData()
 	return ok and playerdata ~= nil
 end
 
+local PlayerDataSearchFailed = false
+
 task.spawn(function()
 	local attempts = 0
 	while not playerdata and attempts < 40 do
@@ -116,6 +118,7 @@ task.spawn(function()
 		StatsStartingSheckles = playerdata.Data.Sheckles or 0
 		lastSheckles = StatsStartingSheckles
 	elseif not playerdata then
+		PlayerDataSearchFailed = true
 		warn("[SCRIPTEXER] Couldn't find the game's price/currency data after retrying for 20s. Buy affordability checks and Stats tracking will stay disabled. This usually means getgc()/debug.getupvalue() aren't supported by your executor, or the game's shop controller structure has changed.")
 	end
 end)
@@ -296,7 +299,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Harvest = 130, Sell = 90, Stats = 210 }
+local PAGE_HEIGHTS = { Buy = 398, Harvest = 130, Sell = 90, Stats = 232 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -981,20 +984,44 @@ end)
 --========================================================
 local statsPage = pages.Stats
 
-local elapsedValue = createStatRow(statsPage, 0, "Elapsed time")
-local earnedValue = createStatRow(statsPage, 24, "Earned so far")
-local spentValue = createStatRow(statsPage, 48, "Spent so far")
-local netValue = createStatRow(statsPage, 72, "Net so far")
-local perSecValue = createStatRow(statsPage, 104, "Per second")
-local perMinValue = createStatRow(statsPage, 128, "Per minute")
-local perHourValue = createStatRow(statsPage, 152, "Per hour")
-local perDayValue = createStatRow(statsPage, 176, "Per day")
+-- Explains *why* the numbers below aren't populating instead of just
+-- showing dashes forever with no indication whether it's still
+-- detecting, actually working, or has given up.
+local statsStatusLabel = Instance.new("TextLabel")
+statsStatusLabel.BackgroundTransparency = 1
+statsStatusLabel.Position = UDim2.new(0, 16, 0, 0)
+statsStatusLabel.Size = UDim2.new(1, -32, 0, 16)
+statsStatusLabel.Font = Enum.Font.GothamBold
+statsStatusLabel.Text = "Detecting game data..."
+statsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+statsStatusLabel.TextSize = 11
+statsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statsStatusLabel.Parent = statsPage
+
+local elapsedValue = createStatRow(statsPage, 20, "Elapsed time")
+local earnedValue = createStatRow(statsPage, 44, "Earned so far")
+local spentValue = createStatRow(statsPage, 68, "Spent so far")
+local netValue = createStatRow(statsPage, 92, "Net so far")
+local perSecValue = createStatRow(statsPage, 124, "Per second")
+local perMinValue = createStatRow(statsPage, 148, "Per minute")
+local perHourValue = createStatRow(statsPage, 172, "Per hour")
+local perDayValue = createStatRow(statsPage, 196, "Per day")
 
 local function refreshStatsUI()
 	local elapsed = tick() - StatsStartTime
 	elapsedValue.Text = formatElapsed(elapsed)
 
 	if not StatsStartingSheckles then
+		if PlayerDataSearchFailed then
+			statsStatusLabel.Text = "Not found — see console for [SCRIPTEXER] warning"
+			statsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+		elseif playerdata == nil then
+			statsStatusLabel.Text = "Detecting game data..."
+			statsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+		else
+			statsStatusLabel.Text = "Game data found, but no Sheckles field — can't track"
+			statsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+		end
 		earnedValue.Text = "—"
 		spentValue.Text = "—"
 		netValue.Text = "—"
@@ -1004,6 +1031,9 @@ local function refreshStatsUI()
 		perDayValue.Text = "—"
 		return
 	end
+
+	statsStatusLabel.Text = "Tracking"
+	statsStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
 
 	earnedValue.Text = formatNumber(TotalEarned)
 	earnedValue.TextColor3 = Color3.fromRGB(120, 255, 170)

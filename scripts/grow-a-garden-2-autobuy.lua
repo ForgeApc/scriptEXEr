@@ -36,21 +36,63 @@ local SellAll = Networking.NPCS.SellAll
 -- RestockStoreController, so we don't have to guess the data shape.
 -- The same live `playerdata` table backs both affordability checks
 -- (Buy tab) and Sheckles tracking (Stats tab).
+--
+-- getgc() can return thousands of live functions, and debug.info(v,"s")
+-- returns nil for some of them (certain closures/C functions) — calling
+-- :match() on that nil would throw and kill the whole scan before it
+-- ever reaches the real target, so every debug.info call here is
+-- defended individually. The scan also retries for up to ~20s instead
+-- of running once at script start, since if this runs immediately on
+-- join (e.g. via Auto Execute) the game's own shop controller may not
+-- have loaded yet — a single early attempt can fail permanently for
+-- the whole session with no indication why.
 --========================================================
 local prices = {}
 local playerdata = nil
-for _, v in pairs(getgc()) do
-	if type(v) == "function" then
-		if debug.info(v, "s"):match("RestockStoreController") then
-			if debug.info(v, "l") == 575 then
-				pcall(function()
-					table.insert(prices, debug.getupvalue(v, 3))
-					playerdata = debug.getupvalue(v, 9)
-				end)
+
+-- Stats state — declared here (not down in the STATS section) because
+-- the retry loop below needs to set these the moment playerdata
+-- resolves, which can happen well after script start.
+local StatsStartTime = tick()
+local StatsStartingSheckles = nil
+local TotalEarned = 0
+local TotalSpent = 0
+local lastSheckles = nil
+
+local function tryFindPlayerData()
+	local ok = pcall(function()
+		for _, v in pairs(getgc()) do
+			if type(v) == "function" then
+				local src = debug.info(v, "s")
+				if src and src:match("RestockStoreController") then
+					local line = debug.info(v, "l")
+					if line == 575 then
+						table.insert(prices, debug.getupvalue(v, 3))
+						playerdata = debug.getupvalue(v, 9)
+					end
+				end
 			end
 		end
-	end
+	end)
+	return ok and playerdata ~= nil
 end
+
+task.spawn(function()
+	local attempts = 0
+	while not playerdata and attempts < 40 do
+		tryFindPlayerData()
+		if playerdata then break end
+		attempts += 1
+		task.wait(0.5)
+	end
+	if playerdata and playerdata.Data then
+		StatsStartTime = tick()
+		StatsStartingSheckles = playerdata.Data.Sheckles or 0
+		lastSheckles = StatsStartingSheckles
+	elseif not playerdata then
+		warn("[SCRIPTEXER] Couldn't find the game's price/currency data after retrying for 20s. Buy affordability checks and Stats tracking will stay disabled. This usually means getgc()/debug.getupvalue() aren't supported by your executor, or the game's shop controller structure has changed.")
+	end
+end)
 
 local function canAfford(item)
 	if not prices or not playerdata then return false end
@@ -184,17 +226,9 @@ end)
 --========================================================
 -- STATS — tracks Sheckles earned/spent by polling the same live
 -- playerdata table used for affordability checks, once a second.
+-- (State declared earlier alongside the playerdata retry loop, which
+-- sets StatsStartingSheckles/lastSheckles once it actually resolves.)
 --========================================================
-local StatsStartTime = tick()
-local StatsStartingSheckles = nil
-local TotalEarned = 0
-local TotalSpent = 0
-local lastSheckles = nil
-
-if playerdata and playerdata.Data then
-	StatsStartingSheckles = playerdata.Data.Sheckles or 0
-	lastSheckles = StatsStartingSheckles
-end
 
 local function formatElapsed(seconds)
 	local h = math.floor(seconds / 3600)

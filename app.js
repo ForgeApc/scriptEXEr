@@ -40,7 +40,7 @@
   const LOADER_SCRIPT = `--[[
   SCRIPTEXER — Universal Loader
   Detects the Roblox game you're currently in (via game.PlaceId), shows
-  a small clean glass HUD in the top-right corner, and runs the best
+  a small clean dark HUD in the top-right corner, and runs the best
   matching script from the SCRIPTEXER catalog. Expand the panel to see
   every script registered for that game and switch between them —
   switching stops whichever one is currently running first.
@@ -62,34 +62,34 @@ local placeId = game.PlaceId
 -- Networking
 --========================================================
 local function httpGet(url)
-\tlocal ok, res = pcall(function()
-\t\treturn game:HttpGet(url)
-\tend)
-\tif ok and res then return res end
+	local ok, res = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if ok and res then return res end
 
-\tlocal req = (syn and syn.request) or (http and http.request) or http_request or request
-\tif req then
-\t\tlocal ok2, res2 = pcall(function()
-\t\t\treturn req({ Url = url, Method = "GET" }).Body
-\t\tend)
-\t\tif ok2 then return res2 end
-\tend
-\treturn nil
+	local req = (syn and syn.request) or (http and http.request) or http_request or request
+	if req then
+		local ok2, res2 = pcall(function()
+			return req({ Url = url, Method = "GET" }).Body
+		end)
+		if ok2 then return res2 end
+	end
+	return nil
 end
 
 -- Turns "1.2M" / "847K" / "312" into a comparable number.
 local function parseDownloads(s)
-\tif not s then return 0 end
-\tlocal num, suffix = s:match("([%d%.]+)%s*([KMB]?)")
-\tnum = tonumber(num) or 0
-\tif suffix == "K" then num = num * 1e3
-\telseif suffix == "M" then num = num * 1e6
-\telseif suffix == "B" then num = num * 1e9 end
-\treturn num
+	if not s then return 0 end
+	local num, suffix = s:match("([%d%.]+)%s*([KMB]?)")
+	num = tonumber(num) or 0
+	if suffix == "K" then num = num * 1e3
+	elseif suffix == "M" then num = num * 1e6
+	elseif suffix == "B" then num = num * 1e9 end
+	return num
 end
 
 --========================================================
--- UI — glass HUD, top-right corner, draggable
+-- UI — solid dark HUD, top-right corner, draggable
 --========================================================
 local gui = Instance.new("ScreenGui")
 gui.Name = "ScriptexerLoaderUI"
@@ -98,11 +98,8 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
--- Note: Roblox has no per-element backdrop-blur, and this panel stays
--- on screen the whole time you play — a real screen-wide BlurEffect
--- would blur your view of the game constantly, which defeats the
--- point of an auto-farm/ESP HUD. The glass look here comes entirely
--- from translucency + a gradient sheen + a bright rim edge instead.
+-- Solid dark card — nearly opaque black, thin subtle border, no gradient
+-- or transparency tricks. Reads clean and legible over any game scene.
 local COMPACT_HEIGHT = 104
 local ROW_HEIGHT = 30
 local MAX_VISIBLE_ROWS = 4
@@ -112,49 +109,22 @@ frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
 frame.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT)
-frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-frame.BackgroundTransparency = 0.86
+frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
+frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
 frame.ClipsDescendants = false
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 18)
+corner.CornerRadius = UDim.new(0, 16)
 corner.Parent = frame
-
--- Glass sheen: a faint diagonal gradient across the translucent card,
--- brighter along the top edge like light catching frosted glass.
-local sheen = Instance.new("UIGradient")
-sheen.Color = ColorSequence.new({
-\tColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-\tColorSequenceKeypoint.new(0.5, Color3.fromRGB(210, 210, 220)),
-\tColorSequenceKeypoint.new(1, Color3.fromRGB(160, 160, 175)),
-})
-sheen.Transparency = NumberSequence.new({
-\tNumberSequenceKeypoint.new(0, 0.55),
-\tNumberSequenceKeypoint.new(0.5, 0.8),
-\tNumberSequenceKeypoint.new(1, 0.9),
-})
-sheen.Rotation = 60
-sheen.Parent = frame
 
 local stroke = Instance.new("UIStroke")
 stroke.Color = Color3.fromRGB(255, 255, 255)
-stroke.Transparency = 0.55
+stroke.Transparency = 0.88
 stroke.Thickness = 1
 stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 stroke.Parent = frame
-
--- A thin bright highlight along the very top edge, like a glass rim catching light.
-local rim = Instance.new("Frame")
-rim.Name = "RimLight"
-rim.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-rim.BackgroundTransparency = 0.35
-rim.BorderSizePixel = 0
-rim.Position = UDim2.new(0, 10, 0, 1)
-rim.Size = UDim2.new(1, -20, 0, 1)
-rim.ZIndex = 2
-rim.Parent = frame
 
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
@@ -175,7 +145,7 @@ status.Position = UDim2.new(0, 16, 0, 32)
 status.Size = UDim2.new(1, -32, 0, 34)
 status.Font = Enum.Font.Gotham
 status.Text = "Detecting game..."
-status.TextColor3 = Color3.fromRGB(225, 225, 230)
+status.TextColor3 = Color3.fromRGB(180, 180, 185)
 status.TextSize = 12
 status.TextWrapped = true
 status.TextXAlignment = Enum.TextXAlignment.Left
@@ -189,7 +159,7 @@ scriptsToggle.Name = "ScriptsToggle"
 scriptsToggle.Position = UDim2.new(0, 16, 1, -38)
 scriptsToggle.Size = UDim2.new(1, -32, 0, 26)
 scriptsToggle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-scriptsToggle.BackgroundTransparency = 0.82
+scriptsToggle.BackgroundTransparency = 0.94
 scriptsToggle.AutoButtonColor = false
 scriptsToggle.Font = Enum.Font.GothamBold
 scriptsToggle.Text = "Scripts ▾"
@@ -205,15 +175,15 @@ toggleCorner.Parent = scriptsToggle
 
 local toggleStroke = Instance.new("UIStroke")
 toggleStroke.Color = Color3.fromRGB(255, 255, 255)
-toggleStroke.Transparency = 0.6
+toggleStroke.Transparency = 0.82
 toggleStroke.Thickness = 1
 toggleStroke.Parent = scriptsToggle
 
 scriptsToggle.MouseEnter:Connect(function()
-\tscriptsToggle.BackgroundTransparency = 0.65
+	scriptsToggle.BackgroundTransparency = 0.85
 end)
 scriptsToggle.MouseLeave:Connect(function()
-\tscriptsToggle.BackgroundTransparency = 0.82
+	scriptsToggle.BackgroundTransparency = 0.94
 end)
 
 -- Script list: a small scrollable panel of rows, one per script,
@@ -247,44 +217,44 @@ listLayout.Parent = scroll
 
 local expanded = false
 local function setExpanded(value)
-\texpanded = value
-\tlocal rowCount = math.min(#scroll:GetChildren() - 1, MAX_VISIBLE_ROWS) -- minus UIListLayout
-\tlocal listHeight = expanded and (math.max(rowCount, 1) * ROW_HEIGHT + (rowCount - 1) * 4) or 0
-\tlistHolder.Visible = expanded
-\tlistHolder.Size = UDim2.new(1, -32, 0, math.max(listHeight, 0))
-\tscriptsToggle.Text = expanded and "Scripts ▴" or "Scripts ▾"
-\tframe.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT + (expanded and (listHeight + 12) or 0))
+	expanded = value
+	local rowCount = math.min(#scroll:GetChildren() - 1, MAX_VISIBLE_ROWS) -- minus UIListLayout
+	local listHeight = expanded and (math.max(rowCount, 1) * ROW_HEIGHT + (rowCount - 1) * 4) or 0
+	listHolder.Visible = expanded
+	listHolder.Size = UDim2.new(1, -32, 0, math.max(listHeight, 0))
+	scriptsToggle.Text = expanded and "Scripts ▴" or "Scripts ▾"
+	frame.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT + (expanded and (listHeight + 12) or 0))
 end
 
 scriptsToggle.MouseButton1Click:Connect(function()
-\tsetExpanded(not expanded)
+	setExpanded(not expanded)
 end)
 
 -- Drag support
 do
-\tlocal dragging, dragStart, startPos = false, nil, nil
-\tframe.Active = true
-\ttitle.Active = true
-\ttitle.InputBegan:Connect(function(input)
-\t\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-\t\t\tdragging = true
-\t\t\tdragStart = input.Position
-\t\t\tstartPos = frame.Position
-\t\t\tinput.Changed:Connect(function()
-\t\t\t\tif input.UserInputState == Enum.UserInputState.End then dragging = false end
-\t\t\tend)
-\t\tend
-\tend)
-\tUserInputService.InputChanged:Connect(function(input)
-\t\tif dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-\t\t\tlocal delta = input.Position - dragStart
-\t\t\tframe.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-\t\tend
-\tend)
+	local dragging, dragStart, startPos = false, nil, nil
+	frame.Active = true
+	title.Active = true
+	title.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
 end
 
 local function setStatus(text)
-\tstatus.Text = text
+	status.Text = text
 end
 
 --========================================================
@@ -301,94 +271,94 @@ local scriptRows = {}
 -- (e.g. on wait()/task.wait()) — the best generic "unload" available
 -- for arbitrary injected scripts without their cooperation.
 local function stopCurrent()
-\tif currentThread and coroutine.status(currentThread) ~= "dead" then
-\t\tpcall(coroutine.close, currentThread)
-\tend
-\tcurrentThread = nil
+	if currentThread and coroutine.status(currentThread) ~= "dead" then
+		pcall(coroutine.close, currentThread)
+	end
+	currentThread = nil
 end
 
 local function refreshRowHighlights()
-\tfor i, entry in ipairs(scriptRows) do
-\t\tlocal active = i == currentIndex
-\t\tentry.frame.BackgroundTransparency = active and 0.6 or 0.9
-\t\tentry.dot.TextColor3 = active and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(150, 150, 155)
-\tend
+	for i, entry in ipairs(scriptRows) do
+		local active = i == currentIndex
+		entry.frame.BackgroundTransparency = active and 0.6 or 0.9
+		entry.dot.TextColor3 = active and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(150, 150, 155)
+	end
 end
 
 local function runScriptAt(index)
-\tstopCurrent()
-\tlocal s = scripts[index]
-\tif not s then return end
-\tcurrentIndex = index
-\tsetStatus("Running: " .. s.title)
-\trefreshRowHighlights()
+	stopCurrent()
+	local s = scripts[index]
+	if not s then return end
+	currentIndex = index
+	setStatus("Running: " .. s.title)
+	refreshRowHighlights()
 
-\tcurrentThread = coroutine.create(function()
-\t\tlocal ok, err = pcall(function()
-\t\t\tloadstring(s.loadstring)()
-\t\tend)
-\t\tif not ok then
-\t\t\tsetStatus("Failed: " .. s.title .. " — " .. tostring(err))
-\t\tend
-\tend)
-\tcoroutine.resume(currentThread)
+	currentThread = coroutine.create(function()
+		local ok, err = pcall(function()
+			loadstring(s.loadstring)()
+		end)
+		if not ok then
+			setStatus("Failed: " .. s.title .. " — " .. tostring(err))
+		end
+	end)
+	coroutine.resume(currentThread)
 end
 
 local function buildScriptRows()
-\tfor _, entry in ipairs(scriptRows) do
-\t\tentry.frame:Destroy()
-\tend
-\tscriptRows = {}
+	for _, entry in ipairs(scriptRows) do
+		entry.frame:Destroy()
+	end
+	scriptRows = {}
 
-\tfor i, s in ipairs(scripts) do
-\t\tlocal row = Instance.new("TextButton")
-\t\trow.Name = "Row" .. i
-\t\trow.LayoutOrder = i
-\t\trow.Size = UDim2.new(1, 0, 0, ROW_HEIGHT - 4)
-\t\trow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-\t\trow.BackgroundTransparency = 0.9
-\t\trow.AutoButtonColor = false
-\t\trow.Text = ""
-\t\trow.ZIndex = 2
-\t\trow.Parent = scroll
+	for i, s in ipairs(scripts) do
+		local row = Instance.new("TextButton")
+		row.Name = "Row" .. i
+		row.LayoutOrder = i
+		row.Size = UDim2.new(1, 0, 0, ROW_HEIGHT - 4)
+		row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		row.BackgroundTransparency = 0.9
+		row.AutoButtonColor = false
+		row.Text = ""
+		row.ZIndex = 2
+		row.Parent = scroll
 
-\t\tlocal rowCorner = Instance.new("UICorner")
-\t\trowCorner.CornerRadius = UDim.new(0, 8)
-\t\trowCorner.Parent = row
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 8)
+		rowCorner.Parent = row
 
-\t\tlocal dot = Instance.new("TextLabel")
-\t\tdot.Name = "dot"
-\t\tdot.BackgroundTransparency = 1
-\t\tdot.Position = UDim2.new(0, 8, 0, 0)
-\t\tdot.Size = UDim2.new(0, 16, 1, 0)
-\t\tdot.Font = Enum.Font.GothamBold
-\t\tdot.Text = s.verified and "✓" or "•"
-\t\tdot.TextColor3 = Color3.fromRGB(150, 150, 155)
-\t\tdot.TextSize = 12
-\t\tdot.ZIndex = 2
-\t\tdot.Parent = row
+		local dot = Instance.new("TextLabel")
+		dot.Name = "dot"
+		dot.BackgroundTransparency = 1
+		dot.Position = UDim2.new(0, 8, 0, 0)
+		dot.Size = UDim2.new(0, 16, 1, 0)
+		dot.Font = Enum.Font.GothamBold
+		dot.Text = s.verified and "✓" or "•"
+		dot.TextColor3 = Color3.fromRGB(150, 150, 155)
+		dot.TextSize = 12
+		dot.ZIndex = 2
+		dot.Parent = row
 
-\t\tlocal label = Instance.new("TextLabel")
-\t\tlabel.BackgroundTransparency = 1
-\t\tlabel.Position = UDim2.new(0, 26, 0, 0)
-\t\tlabel.Size = UDim2.new(1, -34, 1, 0)
-\t\tlabel.Font = Enum.Font.Gotham
-\t\tlabel.Text = s.title
-\t\tlabel.TextColor3 = Color3.fromRGB(235, 235, 240)
-\t\tlabel.TextSize = 12
-\t\tlabel.TextTruncate = Enum.TextTruncate.AtEnd
-\t\tlabel.TextXAlignment = Enum.TextXAlignment.Left
-\t\tlabel.ZIndex = 2
-\t\tlabel.Parent = row
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = UDim2.new(0, 26, 0, 0)
+		label.Size = UDim2.new(1, -34, 1, 0)
+		label.Font = Enum.Font.Gotham
+		label.Text = s.title
+		label.TextColor3 = Color3.fromRGB(235, 235, 240)
+		label.TextSize = 12
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.ZIndex = 2
+		label.Parent = row
 
-\t\trow.MouseButton1Click:Connect(function()
-\t\t\trunScriptAt(i)
-\t\t\tsetExpanded(false)
-\t\tend)
+		row.MouseButton1Click:Connect(function()
+			runScriptAt(i)
+			setExpanded(false)
+		end)
 
-\t\ttable.insert(scriptRows, { frame = row, dot = dot })
-\tend
-\trefreshRowHighlights()
+		table.insert(scriptRows, { frame = row, dot = dot })
+	end
+	refreshRowHighlights()
 end
 
 --========================================================
@@ -397,46 +367,46 @@ end
 setStatus("Detecting game (PlaceId " .. tostring(placeId) .. ")...")
 
 local gamesUrl = string.format(
-\t"%s/rest/v1/games?place_id=eq.%d&select=id,name&apikey=%s",
-\tSUPABASE_URL, placeId, ANON_KEY
+	"%s/rest/v1/games?place_id=eq.%d&select=id,name&apikey=%s",
+	SUPABASE_URL, placeId, ANON_KEY
 )
 local gamesBody = httpGet(gamesUrl)
 if not gamesBody then
-\tsetStatus("Couldn't reach the script database. Check your internet connection.")
-\treturn
+	setStatus("Couldn't reach the script database. Check your internet connection.")
+	return
 end
 
 local okGames, games = pcall(function() return HttpService:JSONDecode(gamesBody) end)
 if not okGames or #games == 0 then
-\tsetStatus("No scripts registered for this game yet.")
-\treturn
+	setStatus("No scripts registered for this game yet.")
+	return
 end
 
 matchedGame = games[1]
 setStatus("Script for " .. matchedGame.name .. " launching...")
 
 local scriptsUrl = string.format(
-\t"%s/rest/v1/scripts?game_id=eq.%s&select=title,loadstring,verified,downloads&apikey=%s",
-\tSUPABASE_URL, HttpService:UrlEncode(matchedGame.id), ANON_KEY
+	"%s/rest/v1/scripts?game_id=eq.%s&select=title,loadstring,verified,downloads&apikey=%s",
+	SUPABASE_URL, HttpService:UrlEncode(matchedGame.id), ANON_KEY
 )
 local scriptsBody = httpGet(scriptsUrl)
 if not scriptsBody then
-\tsetStatus("Failed to fetch scripts for " .. matchedGame.name)
-\treturn
+	setStatus("Failed to fetch scripts for " .. matchedGame.name)
+	return
 end
 
 local okScripts, fetchedScripts = pcall(function() return HttpService:JSONDecode(scriptsBody) end)
 if not okScripts or #fetchedScripts == 0 then
-\tsetStatus(matchedGame.name .. " has no scripts uploaded yet.")
-\treturn
+	setStatus(matchedGame.name .. " has no scripts uploaded yet.")
+	return
 end
 
 -- Prefer verified scripts, then the highest download count.
 table.sort(fetchedScripts, function(a, b)
-\tif a.verified ~= b.verified then
-\t\treturn a.verified
-\tend
-\treturn parseDownloads(a.downloads) > parseDownloads(b.downloads)
+	if a.verified ~= b.verified then
+		return a.verified
+	end
+	return parseDownloads(a.downloads) > parseDownloads(b.downloads)
 end)
 scripts = fetchedScripts
 

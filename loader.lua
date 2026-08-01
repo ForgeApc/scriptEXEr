@@ -1,7 +1,7 @@
 --[[
   SCRIPTEXER — Universal Loader
   Detects the Roblox game you're currently in (via game.PlaceId), shows
-  a small clean glass HUD in the top-right corner, and runs the best
+  a small clean dark HUD in the top-right corner, and runs the best
   matching script from the SCRIPTEXER catalog. Expand the panel to see
   every script registered for that game and switch between them —
   switching stops whichever one is currently running first.
@@ -50,7 +50,7 @@ local function parseDownloads(s)
 end
 
 --========================================================
--- UI — glass HUD, top-right corner, draggable
+-- UI — solid dark HUD, top-right corner, draggable
 --========================================================
 local gui = Instance.new("ScreenGui")
 gui.Name = "ScriptexerLoaderUI"
@@ -59,11 +59,8 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
--- Note: Roblox has no per-element backdrop-blur, and this panel stays
--- on screen the whole time you play — a real screen-wide BlurEffect
--- would blur your view of the game constantly, which defeats the
--- point of an auto-farm/ESP HUD. The glass look here comes entirely
--- from translucency + a gradient sheen + a bright rim edge instead.
+-- Solid dark card — nearly opaque black, thin subtle border, no gradient
+-- or transparency tricks. Reads clean and legible over any game scene.
 local COMPACT_HEIGHT = 104
 local ROW_HEIGHT = 30
 local MAX_VISIBLE_ROWS = 4
@@ -73,49 +70,22 @@ frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 18)
 frame.Size = UDim2.new(0, 270, 0, COMPACT_HEIGHT)
-frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-frame.BackgroundTransparency = 0.86
+frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
+frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
 frame.ClipsDescendants = false
 frame.Parent = gui
 
 local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 18)
+corner.CornerRadius = UDim.new(0, 16)
 corner.Parent = frame
-
--- Glass sheen: a faint diagonal gradient across the translucent card,
--- brighter along the top edge like light catching frosted glass.
-local sheen = Instance.new("UIGradient")
-sheen.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(210, 210, 220)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(160, 160, 175)),
-})
-sheen.Transparency = NumberSequence.new({
-	NumberSequenceKeypoint.new(0, 0.55),
-	NumberSequenceKeypoint.new(0.5, 0.8),
-	NumberSequenceKeypoint.new(1, 0.9),
-})
-sheen.Rotation = 60
-sheen.Parent = frame
 
 local stroke = Instance.new("UIStroke")
 stroke.Color = Color3.fromRGB(255, 255, 255)
-stroke.Transparency = 0.55
+stroke.Transparency = 0.88
 stroke.Thickness = 1
 stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 stroke.Parent = frame
-
--- A thin bright highlight along the very top edge, like a glass rim catching light.
-local rim = Instance.new("Frame")
-rim.Name = "RimLight"
-rim.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-rim.BackgroundTransparency = 0.35
-rim.BorderSizePixel = 0
-rim.Position = UDim2.new(0, 10, 0, 1)
-rim.Size = UDim2.new(1, -20, 0, 1)
-rim.ZIndex = 2
-rim.Parent = frame
 
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
@@ -136,7 +106,7 @@ status.Position = UDim2.new(0, 16, 0, 32)
 status.Size = UDim2.new(1, -32, 0, 34)
 status.Font = Enum.Font.Gotham
 status.Text = "Detecting game..."
-status.TextColor3 = Color3.fromRGB(225, 225, 230)
+status.TextColor3 = Color3.fromRGB(180, 180, 185)
 status.TextSize = 12
 status.TextWrapped = true
 status.TextXAlignment = Enum.TextXAlignment.Left
@@ -150,7 +120,7 @@ scriptsToggle.Name = "ScriptsToggle"
 scriptsToggle.Position = UDim2.new(0, 16, 1, -38)
 scriptsToggle.Size = UDim2.new(1, -32, 0, 26)
 scriptsToggle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-scriptsToggle.BackgroundTransparency = 0.82
+scriptsToggle.BackgroundTransparency = 0.94
 scriptsToggle.AutoButtonColor = false
 scriptsToggle.Font = Enum.Font.GothamBold
 scriptsToggle.Text = "Scripts ▾"
@@ -166,15 +136,15 @@ toggleCorner.Parent = scriptsToggle
 
 local toggleStroke = Instance.new("UIStroke")
 toggleStroke.Color = Color3.fromRGB(255, 255, 255)
-toggleStroke.Transparency = 0.6
+toggleStroke.Transparency = 0.82
 toggleStroke.Thickness = 1
 toggleStroke.Parent = scriptsToggle
 
 scriptsToggle.MouseEnter:Connect(function()
-	scriptsToggle.BackgroundTransparency = 0.65
+	scriptsToggle.BackgroundTransparency = 0.85
 end)
 scriptsToggle.MouseLeave:Connect(function()
-	scriptsToggle.BackgroundTransparency = 0.82
+	scriptsToggle.BackgroundTransparency = 0.94
 end)
 
 -- Script list: a small scrollable panel of rows, one per script,

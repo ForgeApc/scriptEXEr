@@ -1899,25 +1899,51 @@ local function refreshStatsUI()
 	netValue.Text = formatNumber(net)
 	netValue.TextColor3 = net >= 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
 
+	-- Small rates need decimals: formatNumber rounds to whole Sheckles,
+	-- so a real per-second rate of 0.4 was displaying as a flat 0 and
+	-- reading like the tracking was broken.
+	local function formatRate(n)
+		if math.abs(n) < 100 then
+			return string.format("%.2f", n)
+		end
+		return formatNumber(n)
+	end
+
 	local rate = elapsed > 0 and (net / elapsed) or 0
-	perSecValue.Text = formatNumber(rate)
-	perMinValue.Text = formatNumber(rate * 60)
-	perHourValue.Text = formatNumber(rate * 3600)
-	perDayValue.Text = formatNumber(rate * 86400)
+	perSecValue.Text = formatRate(rate)
+	perMinValue.Text = formatRate(rate * 60)
+	perHourValue.Text = formatRate(rate * 3600)
+	perDayValue.Text = formatRate(rate * 86400)
 end
 
-task.spawn(function()
-	while task.wait(1) do
-		local current = getCurrentSheckles()
-		if current and lastSheckles then
-			local delta = current - lastSheckles
-			if delta > 0 then
-				TotalEarned += delta
-			elseif delta < 0 then
-				TotalSpent += (-delta)
-			end
-			lastSheckles = current
+-- Sampling runs every frame, NOT on the UI's refresh interval.
+--
+-- This used to poll once a second, which silently corrupted the
+-- earned/spent split: with auto-buy and auto-sell running, many
+-- transactions land inside a single second, and diffing only the
+-- endpoints collapses them into one net figure. Earn 1,000 and spend
+-- 800 in the same tick and it recorded +200 earned, 0 spent — both
+-- totals wrong, while the net still looked plausible, which is what
+-- made it hard to notice.
+--
+-- Reading a table field per frame is cheap; the expensive part is
+-- redrawing text, so that stays on a slower loop below.
+game:GetService("RunService").Heartbeat:Connect(function()
+	local current = getCurrentSheckles()
+	if not current then return end
+	if lastSheckles then
+		local delta = current - lastSheckles
+		if delta > 0 then
+			TotalEarned += delta
+		elseif delta < 0 then
+			TotalSpent += (-delta)
 		end
+	end
+	lastSheckles = current
+end)
+
+task.spawn(function()
+	while task.wait(0.2) do
 		refreshStatsUI()
 	end
 end)

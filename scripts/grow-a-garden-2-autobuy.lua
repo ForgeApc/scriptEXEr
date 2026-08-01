@@ -120,11 +120,16 @@ end
 
 local BuyInterval = 0.5
 
+-- Fires the purchase remote for every selected item on every pass,
+-- regardless of whether it currently shows in stock — some games only
+-- update the stock Value on a delay after a restock, so waiting for
+-- item.Value > 0 could miss a restock window entirely. This spams the
+-- request instead and lets the server decide whether it goes through.
 local function runBuyLoop(stockFolder, remote, category)
 	task.spawn(function()
 		while task.wait(BuyInterval) do
 			for _, item in pairs(stockFolder:GetChildren()) do
-				if item and typeof(item) == "Instance" and item.Value and item.Value > 0 then
+				if item and typeof(item) == "Instance" then
 					if isSelected(category, item.Name) and canAfford(item.Name) then
 						pcall(function()
 							remote:Fire(item.Name)
@@ -397,7 +402,7 @@ local function createSlider(parent, y, labelText, min, max, default, unit, onCha
 		local value = min + (max - min) * alpha
 		fill.Size = UDim2.new(alpha, 0, 1, 0)
 		knob.Position = UDim2.new(alpha, 0, 0.5, 0)
-		label.Text = string.format("%s: %.2f%s", labelText, value, unit)
+		label.Text = string.format("%s: %.3f%s", labelText, value, unit)
 		onChange(value)
 	end
 
@@ -593,7 +598,7 @@ local categories = {
 local subTabButtons = {}
 local activeSubTab = "All"
 
-createSlider(buyPage, 36, "Buy interval", 0.01, 10, BuyInterval, "s", function(v)
+createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(v)
 	BuyInterval = v
 end)
 
@@ -843,7 +848,7 @@ harvestNote.TextXAlignment = Enum.TextXAlignment.Left
 harvestNote.TextYAlignment = Enum.TextYAlignment.Top
 harvestNote.Parent = harvestPage
 
-createSlider(harvestPage, 76, "Harvest delay", 0.01, 10, HarvestInterval, "s", function(v)
+createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
 	HarvestInterval = v
 end)
 
@@ -856,7 +861,7 @@ createToggleRow(sellPage, 0, "Enable Auto Sell", SellEnabled, function(state)
 	SellEnabled = state
 end)
 
-createSlider(sellPage, 36, "Sell delay", 0.01, 10, SellInterval, "s", function(v)
+createSlider(sellPage, 36, "Sell delay", 0.001, 10, SellInterval, "s", function(v)
 	SellInterval = v
 end)
 

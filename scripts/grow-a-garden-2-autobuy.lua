@@ -31,42 +31,19 @@ local CratesStock = ReplicatedStorage.StockValues.CrateShop.Items
 local CollectFruit = Networking.Garden.CollectFruit
 local SellAll = Networking.NPCS.SellAll
 
---========================================================
--- Pull prices + player currency straight out of the game's own
--- RestockStoreController, so we don't have to guess the data shape.
--- The same live `playerdata` table backs both affordability checks
--- (Buy tab) and Sheckles tracking (Stats tab).
---
--- getgc() can return thousands of live functions, and debug.info(v,"s")
--- returns nil for some of them (certain closures/C functions) — calling
--- :match() on that nil would throw and kill the whole scan before it
--- ever reaches the real target, so every debug.info call here is
--- defended individually. The scan also retries for up to ~20s instead
--- of running once at script start, since if this runs immediately on
--- join (e.g. via Auto Execute) the game's own shop controller may not
--- have loaded yet — a single early attempt can fail permanently for
--- the whole session with no indication why.
---========================================================
+-- Item prices, collected opportunistically while searching for the
+-- Sheckles balance below. Only used by canAfford(), which the buy
+-- loop no longer calls.
 local prices = {}
-local playerdata = nil
 
--- Stats state — declared here (not down in the STATS section) because
--- the retry loop below needs to set these the moment playerdata
+-- Stats state — declared up here (not down in the STATS section)
+-- because the search below needs to set these the moment the balance
 -- resolves, which can happen well after script start.
 local StatsStartTime = tick()
 local StatsStartingSheckles = nil
 local TotalEarned = 0
 local TotalSpent = 0
 local lastSheckles = nil
-
--- Recognizes playerdata / a prices table by shape rather than by a
--- hardcoded upvalue index, so this keeps working even if the game's
--- controller script gets recompiled and its upvalues shift around
--- (a hardcoded index or line number breaks silently the instant that
--- happens — this doesn't care what index anything is at).
-local function looksLikePlayerData(t)
-	return type(t) == "table" and type(t.Data) == "table" and type(t.Data.Sheckles) == "number"
-end
 
 local function looksLikePrices(t)
 	if type(t) ~= "table" then return false end
@@ -78,68 +55,178 @@ local function looksLikePrices(t)
 	return false
 end
 
-local function tryFindPlayerData()
-	local ok = pcall(function()
-		for _, v in pairs(getgc()) do
-			if type(v) == "function" then
-				local src = debug.info(v, "s")
-				if src and src:match("RestockStoreController") then
-					local i = 1
-					while true do
-						local ok2, name, value = pcall(debug.getupvalue, v, i)
-						if not ok2 or not name then break end
-						if not playerdata and looksLikePlayerData(value) then
-							playerdata = value
-						end
-						if #prices == 0 and looksLikePrices(value) then
-							table.insert(prices, value)
-						end
-						i += 1
-					end
+--========================================================
+-- Finding the EXACT Sheckles balance.
+--
+-- The previous version only looked at upvalues of functions whose
+-- source matched "RestockStoreController" — one hardcoded script
+-- name. If that script was renamed, restructured, or simply hadn't
+-- loaded, the search found nothing and Stats stayed dead with no way
+-- to recover. This tries several independent strategies instead and
+-- stops at the first that yields a live number.
+--
+-- Each strategy returns a *getter*, not a snapshot, so the value
+-- stays live as the balance changes.
+--========================================================
+local sheckleGetter = nil -- function() -> number
+local sheckleSource = nil -- short description of which strategy won
+local SheckleSearchFailed = false
+
+-- 1. A live table on the GC heap holding the balance. getgc(true)
+--    includes tables (not just functions) on most executors, so this
+--    can find the player's data table directly — no script name, no
+--    upvalue traversal, nothing position-dependent.
+local function findViaHeapTables()
+	local ok, list = pcall(getgc, true)
+	if not ok or type(list) ~= "table" then return nil end
+	local scanned = 0
+	for _, v in pairs(list) do
+		-- getgc(true) can return tens of thousands of tables; yielding
+		-- periodically keeps this from visibly freezing the game.
+		scanned += 1
+		if scanned % 2000 == 0 then task.wait() end
+		if type(v) == "table" then
+			local ok2, getter = pcall(function()
+				local data = rawget(v, "Data")
+				if type(data) == "table" and type(rawget(data, "Sheckles")) == "number" then
+					return function() return v.Data.Sheckles end
 				end
+				if type(rawget(v, "Sheckles")) == "number" then
+					return function() return v.Sheckles end
+				end
+				return nil
+			end)
+			if ok2 and getter then
+				pcall(function()
+					if #prices == 0 and looksLikePrices(v) then table.insert(prices, v) end
+				end)
+				return getter, "heap table"
 			end
 		end
-	end)
-	return ok and playerdata ~= nil
-end
-
-local PlayerDataSearchFailed = false
-
--- Exact number only — no leaderstats fallback. If this never resolves,
--- Stats stays honestly unavailable rather than showing an approximate
--- number silently rounded to whatever leaderstats displays.
-local function getCurrentSheckles()
-	if playerdata and playerdata.Data and type(playerdata.Data.Sheckles) == "number" then
-		return playerdata.Data.Sheckles
 	end
 	return nil
 end
 
+-- 2. Upvalues of *any* function, not just one named script. Same
+--    shape matching as before, just without the name restriction
+--    that was likely causing the failure.
+local function findViaUpvalues()
+	local result, desc = nil, nil
+	local scanned = 0
+	pcall(function()
+		for _, v in pairs(getgc()) do
+			scanned += 1
+			if scanned % 1000 == 0 then task.wait() end
+			if type(v) == "function" then
+				local i = 1
+				while true do
+					local ok, name, value = pcall(debug.getupvalue, v, i)
+					if not ok or not name then break end
+					if type(value) == "table" then
+						local ok2 = pcall(function()
+							local data = rawget(value, "Data")
+							if type(data) == "table" and type(rawget(data, "Sheckles")) == "number" then
+								result = function() return value.Data.Sheckles end
+								desc = "upvalue .Data.Sheckles"
+							elseif type(rawget(value, "Sheckles")) == "number" then
+								result = function() return value.Sheckles end
+								desc = "upvalue .Sheckles"
+							end
+						end)
+						if ok2 and result then return end
+						if #prices == 0 and looksLikePrices(value) then
+							table.insert(prices, value)
+						end
+					end
+					i += 1
+				end
+			end
+		end
+	end)
+	if result then return result, desc end
+	return nil
+end
+
+-- 3. A numeric attribute on the player (exact by definition).
+local function findViaAttributes()
+	local player = Players.LocalPlayer
+	local ok, attrs = pcall(function() return player:GetAttributes() end)
+	if not ok or type(attrs) ~= "table" then return nil end
+	for name, value in pairs(attrs) do
+		if type(value) == "number" and tostring(name):lower():match("sheckle") then
+			return function() return player:GetAttribute(name) end, "attribute:" .. tostring(name)
+		end
+	end
+	return nil
+end
+
+-- 4. A NumberValue/IntValue somewhere under the player. Deliberately
+--    excludes StringValue — a string balance is the abbreviated
+--    display form ("1.9M") and isn't exact.
+local function findViaValueObjects()
+	local player = Players.LocalPlayer
+	local ok, descendants = pcall(function() return player:GetDescendants() end)
+	if not ok then return nil end
+	for _, inst in ipairs(descendants) do
+		if (inst:IsA("NumberValue") or inst:IsA("IntValue")) and inst.Name:lower():match("sheckle") then
+			return function() return inst.Value end, "value object:" .. inst.Name
+		end
+	end
+	return nil
+end
+
+local function getCurrentSheckles()
+	if not sheckleGetter then return nil end
+	local ok, value = pcall(sheckleGetter)
+	if ok and type(value) == "number" then return value end
+	return nil
+end
+
 task.spawn(function()
+	local strategies = {
+		{ fn = findViaHeapTables, name = "heap tables" },
+		{ fn = findViaUpvalues, name = "upvalues" },
+		{ fn = findViaAttributes, name = "attributes" },
+		{ fn = findViaValueObjects, name = "value objects" },
+	}
+
 	local attempts = 0
-	while not playerdata and attempts < 40 do
-		tryFindPlayerData()
-		if playerdata then break end
+	while not sheckleGetter and attempts < 40 do
+		for _, strategy in ipairs(strategies) do
+			local ok, getter, desc = pcall(strategy.fn)
+			if ok and getter then
+				sheckleGetter = getter
+				sheckleSource = desc or strategy.name
+				break
+			end
+		end
+		if sheckleGetter then break end
 		attempts += 1
 		task.wait(0.5)
 	end
-	if playerdata and playerdata.Data and type(playerdata.Data.Sheckles) == "number" then
+
+	local starting = getCurrentSheckles()
+	if starting then
 		StatsStartTime = tick()
-		StatsStartingSheckles = playerdata.Data.Sheckles
-		lastSheckles = StatsStartingSheckles
+		StatsStartingSheckles = starting
+		lastSheckles = starting
 	else
-		PlayerDataSearchFailed = true
-		warn("[SCRIPTEXER] Couldn't find the exact Sheckles value after retrying for 20s. Buy still works (it no longer needs this). Stats tracking will stay disabled.")
+		SheckleSearchFailed = true
+		warn("[SCRIPTEXER] Couldn't find the exact Sheckles balance after trying heap tables, upvalues, player attributes and value objects for 20s. Buy still works (it doesn't need this). Stats will stay unavailable.")
 	end
 end)
 
+-- Kept for reference/possible future use. The buy loop deliberately
+-- does NOT call this — it fires unconditionally and lets the server
+-- decide, which is what actually got Buy working.
 local function canAfford(item)
-	if not prices or not playerdata then return false end
+	local balance = getCurrentSheckles()
+	if not balance or #prices == 0 then return false end
 	for _, options in pairs(prices) do
 		local success, result = pcall(function()
 			local itemData = options[item]
 			if not itemData then return false end
-			return (playerdata.Data.Sheckles or 0) >= itemData.price
+			return balance >= itemData.price
 		end)
 		if success and result then return true end
 	end
@@ -283,10 +370,10 @@ task.spawn(function()
 end)
 
 --========================================================
--- STATS — tracks Sheckles earned/spent by polling the same live
--- playerdata table used for affordability checks, once a second.
--- (State declared earlier alongside the playerdata retry loop, which
--- sets StatsStartingSheckles/lastSheckles once it actually resolves.)
+-- STATS — polls the exact Sheckles balance once a second and
+-- accumulates every increase as earned and every decrease as spent,
+-- so selling shows up as cumulative income. (State is declared
+-- earlier, alongside the balance search that sets it up.)
 --========================================================
 
 local function formatElapsed(seconds)
@@ -1040,7 +1127,7 @@ local function refreshStatsUI()
 	elapsedValue.Text = formatElapsed(elapsed)
 
 	if not StatsStartingSheckles then
-		if PlayerDataSearchFailed then
+		if SheckleSearchFailed then
 			statsStatusLabel.Text = "Exact Sheckles value not found — Stats unavailable"
 			statsStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		else
@@ -1057,7 +1144,7 @@ local function refreshStatsUI()
 		return
 	end
 
-	statsStatusLabel.Text = "Tracking"
+	statsStatusLabel.Text = "Tracking · " .. tostring(sheckleSource or "?")
 	statsStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
 
 	earnedValue.Text = formatNumber(TotalEarned)

@@ -59,16 +59,42 @@ local TotalEarned = 0
 local TotalSpent = 0
 local lastSheckles = nil
 
+-- Recognizes playerdata / a prices table by shape rather than by a
+-- hardcoded upvalue index, so this keeps working even if the game's
+-- controller script gets recompiled and its upvalues shift around
+-- (a hardcoded index or line number breaks silently the instant that
+-- happens — this doesn't care what index anything is at).
+local function looksLikePlayerData(t)
+	return type(t) == "table" and type(t.Data) == "table" and type(t.Data.Sheckles) == "number"
+end
+
+local function looksLikePrices(t)
+	if type(t) ~= "table" then return false end
+	for _, entry in pairs(t) do
+		if type(entry) == "table" and type(entry.price) == "number" then
+			return true
+		end
+	end
+	return false
+end
+
 local function tryFindPlayerData()
 	local ok = pcall(function()
 		for _, v in pairs(getgc()) do
 			if type(v) == "function" then
 				local src = debug.info(v, "s")
 				if src and src:match("RestockStoreController") then
-					local line = debug.info(v, "l")
-					if line == 575 then
-						table.insert(prices, debug.getupvalue(v, 3))
-						playerdata = debug.getupvalue(v, 9)
+					local i = 1
+					while true do
+						local ok2, name, value = pcall(debug.getupvalue, v, i)
+						if not ok2 or not name then break end
+						if not playerdata and looksLikePlayerData(value) then
+							playerdata = value
+						end
+						if #prices == 0 and looksLikePrices(value) then
+							table.insert(prices, value)
+						end
+						i += 1
 					end
 				end
 			end

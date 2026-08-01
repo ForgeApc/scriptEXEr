@@ -484,6 +484,7 @@ local PlantSelected = {} -- seed name -> true
 local PlantArgOrder = nil -- nil = not yet determined, then "pos_first" / "name_first"
 local PlantFiredCount = 0
 local PlantLastFired = ""
+local PlantLastTool = "none"
 
 local function isPlantSelected(name)
 	return PlantSelected[name] == true
@@ -520,20 +521,66 @@ pcall(function()
 	if type(writes) == "table" then PlantArity = #writes end
 end)
 
+-- Seeds are Tools in the Backpack, and the world prefixes them ("Maple
+-- Corn", not "Corn"), so the shop name the UI selects by is not the name
+-- the plant remote expects. Resolve to the real Tool, equip it — the
+-- server reads the held tool — and fire using its actual name.
+local function resolveSeedTool(seedName)
+	local player = Players.LocalPlayer
+	local character = player.Character
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local wanted = seedName:lower()
+
+	local function match(container)
+		if not container then return nil end
+		for _, tool in ipairs(container:GetChildren()) do
+			if tool:IsA("Tool") then
+				local n = tool.Name:lower()
+				-- Skip harvested produce ("Maple Tulip [1.00kg]"), which
+				-- is a different item from the plantable seed.
+				if not n:find("%[") and (n == wanted or n:find(wanted, 1, true)) then
+					return tool
+				end
+			end
+		end
+		return nil
+	end
+
+	local tool = match(character) or match(backpack)
+	if tool and character then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid and tool.Parent ~= character then
+			pcall(function() humanoid:EquipTool(tool) end)
+		end
+	end
+	return tool
+end
+
 -- Every plausible shape, each labelled so the winner can be shown in the
 -- UI. Built per-call because they close over the actual values.
-local function plantCandidates(seedName, position)
+local function plantCandidates(seedName, position, tool)
 	local cf = CFrame.new(position)
 	local plot = OwnerPlot
 	return {
-		{ name = "pos_first", args = { position, seedName } },
-		{ name = "name_first", args = { seedName, position } },
-		{ name = "name_cf", args = { seedName, cf } },
-		{ name = "cf_first", args = { cf, seedName } },
+		-- 3-arg shapes first: that's this world's measured arity.
 		{ name = "name_pos_plot", args = { seedName, position, plot } },
 		{ name = "plot_name_pos", args = { plot, seedName, position } },
 		{ name = "name_pos_rot", args = { seedName, position, 0 } },
 		{ name = "name_cf_plot", args = { seedName, cf, plot } },
+		{ name = "tool_pos_plot", args = { tool, position, plot } },
+		{ name = "tool_name_pos", args = { tool, seedName, position } },
+		{ name = "plot_tool_pos", args = { plot, tool, position } },
+		{ name = "plot_pos_name", args = { plot, position, seedName } },
+		{ name = "pos_name_plot", args = { position, seedName, plot } },
+		{ name = "pos_plot_name", args = { position, plot, seedName } },
+		{ name = "name_pos_tool", args = { seedName, position, tool } },
+		{ name = "cf_name_plot", args = { cf, seedName, plot } },
+		{ name = "name_cf_rot", args = { seedName, cf, 0 } },
+		-- Fallbacks for other worlds.
+		{ name = "pos_first", args = { position, seedName } },
+		{ name = "name_first", args = { seedName, position } },
+		{ name = "name_cf", args = { seedName, cf } },
+		{ name = "cf_first", args = { cf, seedName } },
 		{ name = "pos_only", args = { position } },
 		{ name = "name_only", args = { seedName } },
 	}
@@ -544,7 +591,11 @@ local function fireCandidate(candidate)
 end
 
 local function firePlant(seedName, position)
-	local candidates = plantCandidates(seedName, position)
+	local tool = resolveSeedTool(seedName)
+	PlantLastTool = tool and tool.Name or "none"
+	-- Use the Tool's real in-world name when we have one — the shop name
+	-- and the item name differ in prefixed worlds like Maple.
+	local candidates = plantCandidates(tool and tool.Name or seedName, position, tool)
 
 	if PlantArgOrder then
 		for _, candidate in ipairs(candidates) do
@@ -1586,8 +1637,8 @@ task.spawn(function()
 			-- Requests are going out but the game never reported a plant:
 			-- wrong spot, no seeds, or this world rejects it.
 			plantStatusLabel.Text = string.format(
-				"Sent %d requests (remote takes %s args), none planted — check you're on plantable ground with those seeds.",
-				PlantFiredCount, PlantArity and tostring(PlantArity) or "?"
+				"Sent %d requests · %s args · tool: %s — none planted yet.",
+				PlantFiredCount, PlantArity and tostring(PlantArity) or "?", PlantLastTool
 			)
 			plantStatusLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
 		elseif PlantMode == "fixed" and not PlantFixedPosition then

@@ -146,6 +146,13 @@ end
 
 local BuyInterval = 0.5
 
+-- Live proof-of-activity state, surfaced both in the console (so you
+-- can literally watch it firing) and as a status line in the Buy page
+-- UI — added because every previous fix here was guesswork with no
+-- visibility into whether the loop was actually attempting anything.
+local BuyAttemptCount = 0
+local BuyLastAttempt = ""
+
 -- Fires the purchase remote for every selected item on every pass,
 -- regardless of whether it currently shows in stock — some games only
 -- update the stock Value on a delay after a restock, so waiting for
@@ -157,6 +164,9 @@ local function runBuyLoop(stockFolder, remote, category)
 			for _, item in pairs(stockFolder:GetChildren()) do
 				if item and typeof(item) == "Instance" then
 					if isSelected(category, item.Name) and canAfford(item.Name) then
+						BuyAttemptCount += 1
+						BuyLastAttempt = category .. " · " .. item.Name
+						print(string.format("[SCRIPTEXER] Buy attempt #%d: %s (%s)", BuyAttemptCount, item.Name, category))
 						pcall(function()
 							remote:Fire(item.Name)
 						end)
@@ -286,7 +296,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 380, Harvest = 130, Sell = 90, Stats = 210 }
+local PAGE_HEIGHTS = { Buy = 398, Harvest = 130, Sell = 90, Stats = 210 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -681,10 +691,32 @@ createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(
 	BuyInterval = v
 end)
 
+-- Live proof the loop is actually attempting purchases — updates every
+-- time runBuyLoop fires, whether or not the game accepts the purchase.
+local buyStatusLabel = Instance.new("TextLabel")
+buyStatusLabel.BackgroundTransparency = 1
+buyStatusLabel.Position = UDim2.new(0, 16, 0, 146)
+buyStatusLabel.Size = UDim2.new(1, -32, 0, 16)
+buyStatusLabel.Font = Enum.Font.Gotham
+buyStatusLabel.Text = "Attempts: 0 · nothing selected yet"
+buyStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 155)
+buyStatusLabel.TextSize = 11
+buyStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+buyStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+buyStatusLabel.Parent = buyPage
+
+task.spawn(function()
+	while task.wait(0.2) do
+		if BuyAttemptCount > 0 then
+			buyStatusLabel.Text = string.format("Attempts: %d · last: %s", BuyAttemptCount, BuyLastAttempt)
+		end
+	end
+end)
+
 local listHolder = Instance.new("ScrollingFrame")
 listHolder.BackgroundTransparency = 1
-listHolder.Position = UDim2.new(0, 16, 0, 152)
-listHolder.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Buy - 152 - 8)
+listHolder.Position = UDim2.new(0, 16, 0, 170)
+listHolder.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Buy - 170 - 8)
 listHolder.CanvasSize = UDim2.new(0, 0, 0, 0)
 listHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
 listHolder.ScrollBarThickness = 3

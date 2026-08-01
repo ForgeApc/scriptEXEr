@@ -724,7 +724,7 @@ runScriptAt(1)
   }
 
   // UNIVERSAL LOADER
-  const LOADER_URL = "https://cdn.jsdelivr.net/gh/ForgeApc/scriptEXEr@main/loader.lua";
+  const LOADER_URL = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/loader.lua";
   const LOADER_LOADSTRING = `loadstring(game:HttpGet("${LOADER_URL}"))()`;
 
   function viewLoader() {

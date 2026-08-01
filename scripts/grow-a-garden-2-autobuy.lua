@@ -729,20 +729,55 @@ local function getPlantPosition()
 	return nil
 end
 
+-- Is the Tool currently in your hands one of the seeds you selected?
+-- Selection is by shop name ("Carrot"); the held Tool carries the
+-- world-prefixed name ("Maple Carrot"), so match loosely, and ignore
+-- harvested produce, whose name carries a [1.00kg] weight.
+local function heldSelectedSeed()
+	local character = Players.LocalPlayer.Character
+	if not character then return nil end
+	for _, tool in ipairs(character:GetChildren()) do
+		if tool:IsA("Tool") and not tool.Name:find("%[") then
+			local held = tool.Name:lower()
+			for seedName, on in pairs(PlantSelected) do
+				if on then
+					local wanted = seedName:lower()
+					if held == wanted or held:find(wanted, 1, true) then
+						return tool
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
 task.spawn(function()
 	while task.wait(PlantInterval) do
 		if PlantEnabled then
-			for seedName, on in pairs(PlantSelected) do
-				if on then
-					-- Resolved per seed, not once per tick, so random
-					-- mode actually scatters instead of stacking every
-					-- seed on one spot.
-					local position = getPlantPosition()
-					if position then
-						if firePlant(seedName, position) then
-							PlantFiredCount += 1
-							PlantLastFired = seedName
-						end
+			-- Plant whatever seed is actually in your hands. Only the
+			-- game's own equip makes the server accept a plant here —
+			-- every attempt to force a swap from the script planted
+			-- nothing — and the game auto-switches to the next seed
+			-- once one runs out, which walks through the selection on
+			-- its own.
+			local tool = heldSelectedSeed()
+			if tool then
+				local position = getPlantPosition()
+				if position then
+					if firePlant(tool.Name, position) then
+						PlantFiredCount += 1
+						PlantLastFired = tool.Name
+					end
+				end
+			else
+				-- Nothing selected is held, so there's nothing the game
+				-- will let us plant — try to equip one selected seed and
+				-- pick it up on the next tick.
+				for seedName, on in pairs(PlantSelected) do
+					if on then
+						resolveSeedTool(seedName)
+						break
 					end
 				end
 			end

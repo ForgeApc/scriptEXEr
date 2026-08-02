@@ -446,13 +446,24 @@ local HarvestSkipped = 0 -- plants left alone by the exclusion list
 -- on .Name meant exclusions silently never fired, so every plausible
 -- identifying field is checked.
 local function plantNames(plant)
-	local names = { plant.Name }
+	-- SeedName is where this game keeps the crop ("Strawberry"), matching
+	-- the shop names the exclusion list shows. Everything else is a
+	-- fallback for other worlds.
+	local names = {}
+	local seedName = plant:GetAttribute("SeedName")
+	if type(seedName) == "string" and seedName ~= "" then
+		table.insert(names, seedName)
+	end
+	table.insert(names, plant.Name)
 	local ok, attrs = pcall(function() return plant:GetAttributes() end)
 	if ok and attrs then
 		for key, value in pairs(attrs) do
 			if type(value) == "string" and value ~= "" then
 				local k = tostring(key):lower()
-				if k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop") then
+				-- PlantId is a guid and PlantType is the literal word
+				-- "Plant"; neither identifies a crop.
+				local useless = k == "plantid" or k == "planttype" or k == "userid"
+				if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop")) then
 					table.insert(names, value)
 				end
 			end
@@ -980,16 +991,27 @@ local Shovel = {
 }
 
 do
-	-- Anything that could name this plant. Plot children are usually
-	-- named by id, so the crop name generally comes from an attribute.
+	-- This game stores the crop on the plant as SeedName ("Strawberry"),
+	-- while the instance is named "<userid>_<guid>". Read the attribute;
+	-- everything below it is a fallback for other worlds.
 	local function identity(plant)
-		local names = { plant.Name }
+		local names = {}
+		local seedName = plant:GetAttribute("SeedName")
+		if type(seedName) == "string" and seedName ~= "" then
+			table.insert(names, seedName)
+		end
+		table.insert(names, plant.Name)
+
 		local ok, attrs = pcall(function() return plant:GetAttributes() end)
 		if ok and attrs then
 			for key, value in pairs(attrs) do
 				if type(value) == "string" and value ~= "" then
 					local k = tostring(key):lower()
-					if k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop") then
+					-- PlantId is a guid, PlantType is the literal word
+					-- "Plant" — labelling a row "Plant" is no better
+					-- than labelling it with the id.
+					local useless = k == "plantid" or k == "planttype" or k == "userid" or k == "seedname"
+					if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("crop")) then
 						table.insert(names, value)
 					end
 				end
@@ -998,38 +1020,28 @@ do
 		return names
 	end
 
-	-- "d41f8a02-1c9e-..." is an id, not a crop. Ids have no spaces, mix
-	-- letters and digits, and run long; real names ("Maple Corn") don't.
+	-- "11297928402_f9875aaa-aebb-..." is an id, not a crop.
 	local function looksLikeId(text)
 		if text:find("%-") and text:len() >= 16 then return true end
 		if text:find(" ") then return false end
 		return text:len() >= 12 and text:find("%d") ~= nil and text:find("%a") ~= nil
 	end
 
-	-- The label shown in the picker: the first candidate that reads like
-	-- a name, falling back to a child's name (plots often hold a model
-	-- named after the crop) and only then to the raw id.
 	local function labelFor(plant)
-		local candidates = identity(plant)
-		-- Attributes first: index 1 is the instance name, which is the
-		-- id in exactly the case this exists to fix.
-		for i = 2, #candidates do
-			if not looksLikeId(candidates[i]) then return candidates[i] end
-		end
-		if not looksLikeId(plant.Name) then return plant.Name end
-
-		local ok, children = pcall(function() return plant:GetChildren() end)
-		if ok then
-			for _, child in ipairs(children) do
-				if not looksLikeId(child.Name) and child.Name ~= "Fruits" and child.Name ~= "Visual" then
-					return child.Name
-				end
-			end
+		for _, candidate in ipairs(identity(plant)) do
+			if not looksLikeId(candidate) then return candidate end
 		end
 		return plant.Name
 	end
 
 	local function isSelectedPlant(plant)
+		-- Fast path first: with ~900 plants scanned every tick, reading
+		-- one attribute beats building a candidate list per plant.
+		local seedName = plant:GetAttribute("SeedName")
+		if type(seedName) == "string" and Shovel.selected[seedName] then
+			return true
+		end
+
 		for wanted, on in pairs(Shovel.selected) do
 			if on then
 				local target = wanted:lower()

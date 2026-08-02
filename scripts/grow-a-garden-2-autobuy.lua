@@ -1044,7 +1044,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 130, Sell = 90, Stats = 232 }
+local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 384, Sell = 90, Stats = 232 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -2229,7 +2229,10 @@ do
 
 	local list = Instance.new("ScrollingFrame")
 	list.Position = UDim2.new(0, 16, 0, 166)
-	list.Size = UDim2.new(1, -32, 1, -176)
+	-- Sized against the page height, not the parent's remaining space:
+	-- the page is a fixed-height frame, so "1, -176" measured against a
+	-- page that was still 130px tall left the list clipped to nothing.
+	list.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Harvest - 166 - 8)
 	list.BackgroundTransparency = 1
 	list.CanvasSize = UDim2.new(0, 0, 0, 0)
 	list.AutomaticCanvasSize = Enum.AutomaticSize.Y

@@ -501,14 +501,9 @@ local function getHarvestTargets()
 		end
 	end
 
-	-- Ripe (fully grown) first; still-growing ones are attempted after.
-	table.sort(targets, function(a, b)
-		local ra, rb = isGrown(a), isGrown(b)
-		if ra ~= rb then return ra end
-		return false
-	end)
 	return targets
 end
+
 
 local function harvestOne(target)
 	local id = target:GetAttribute("PlantId")
@@ -522,21 +517,56 @@ local HarvestEnabled = false
 local HarvestInterval = 0.5
 
 task.spawn(function()
-	-- Scanning the plot means walking every plant and fruit and sorting
-	-- the result. At a 0.001s delay that dwarfs the actual harvesting,
-	-- so the scan is reused for a short window while the harvest calls
-	-- keep firing at full speed.
-	local cachedTargets, cachedAt = {}, 0
+	-- Ripe first, still-growing after — as two passes rather than a sort.
+	-- table.sort calls the comparator O(n log n) times and each call read
+	-- two attributes off both plants; on a large garden that alone was
+	-- tens of thousands of property reads per scan.
+	local function orderHarvestTargets(targets)
+		local ripe, growing = {}, {}
+		for _, target in ipairs(targets) do
+			if isGrown(target) then
+				table.insert(ripe, target)
+			else
+				table.insert(growing, target)
+			end
+		end
+		for _, target in ipairs(growing) do
+			table.insert(ripe, target)
+		end
+		return ripe
+	end
+
+	-- Two separate costs on a big garden, both fixed here.
+	--
+	-- Scanning: walking every plant and fruit is far too expensive to
+	-- redo every tick, so a scan is reused for a second.
+	--
+	-- Firing: the loop used to send a harvest request for EVERY fruit on
+	-- the plot on EVERY tick. With thousands of plants at a 0.001s delay
+	-- that is millions of remote calls a minute — the script flooding
+	-- itself. It now works through the list a slice at a time, picking
+	-- up where it left off, so a huge garden costs the same per tick as
+	-- a small one and simply takes more ticks to come round again.
+	local BATCH = 40
+	local cachedTargets, cachedAt, cursor = {}, 0, 1
 
 	while task.wait(HarvestInterval) do
 		if HarvestEnabled and OwnerPlot then
-			if tick() - cachedAt > 0.25 then
-				cachedTargets = getHarvestTargets()
+			if tick() - cachedAt > 1 then
+				cachedTargets = orderHarvestTargets(getHarvestTargets())
 				cachedAt = tick()
+				cursor = 1
 			end
-			for _, target in ipairs(cachedTargets) do
-				if target.Parent then
-					harvestOne(target)
+
+			local count = #cachedTargets
+			if count > 0 then
+				for _ = 1, math.min(BATCH, count) do
+					local target = cachedTargets[cursor]
+					if target and target.Parent then
+						harvestOne(target)
+					end
+					cursor += 1
+					if cursor > count then cursor = 1 end
 				end
 			end
 		end
@@ -774,8 +804,17 @@ local PlantFixedPosition = nil
 -- which is what the farmland slab reliably is. Planting happens on
 -- that part's top surface rather than at its centre, so seeds land on
 -- the ground instead of inside it.
+-- Cached, because this walks every descendant of the plot and random
+-- planting asks for it on every tick. On a large garden that is tens of
+-- thousands of instances per tick, for a slab that never changes.
+local PlotGroundCache = { part = nil, plot = nil }
+
 local function getPlotGround()
 	if not OwnerPlot then return nil end
+	if PlotGroundCache.part and PlotGroundCache.part.Parent and PlotGroundCache.plot == OwnerPlot then
+		return PlotGroundCache.part
+	end
+
 	local best, bestArea = nil, 0
 	for _, part in ipairs(OwnerPlot:GetDescendants()) do
 		if part:IsA("BasePart") then
@@ -785,6 +824,8 @@ local function getPlotGround()
 			end
 		end
 	end
+
+	PlotGroundCache.part, PlotGroundCache.plot = best, OwnerPlot
 	return best
 end
 

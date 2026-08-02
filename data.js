@@ -454,5 +454,40 @@ const Store = {
   },
 };
 
+/**
+ * Remote control link.
+ *
+ * The in-game script registers itself under a short code and polls its
+ * own row for config. The site writes to that row — nothing here talks
+ * to the game directly, so a closed tab or a dropped connection just
+ * means the script keeps its last settings.
+ */
+const Control = {
+  async fetchSession(code) {
+    const { data, error } = await sb
+      .from("sessions")
+      .select("code, config, status, updated_at")
+      .eq("code", String(code || "").trim().toUpperCase())
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  /** Merge a patch into the session's config, leaving other keys alone. */
+  async updateConfig(code, patch) {
+    const key = String(code || "").trim().toUpperCase();
+    const session = await Control.fetchSession(key);
+    if (!session) throw new Error("No script is linked to that code.");
+    const config = Object.assign({}, session.config || {}, patch);
+    const { error } = await sb
+      .from("sessions")
+      .update({ config, updated_at: new Date().toISOString() })
+      .eq("code", key);
+    if (error) throw error;
+    return config;
+  },
+};
+
 window.Store = Store;
+window.Control = Control;
 

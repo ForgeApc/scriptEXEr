@@ -851,6 +851,192 @@ runScript(toRun)
       </section>`;
   }
 
+  /* ---------- Remote control ---------- */
+
+  // Every switch the site can flip, described once. The form, the
+  // change handler and the payload are all built from this, so adding a
+  // control later means adding one row here and nothing else.
+  const CONTROLS = [
+    { group: "Plant", key: "plantEnabled", label: "Auto plant", type: "toggle" },
+    { group: "Plant", key: "plantInterval", label: "Plant delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+    { group: "Buy", key: "buyInterval", label: "Buy interval", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+    { group: "Harvest", key: "harvestEnabled", label: "Auto harvest", type: "toggle" },
+    { group: "Harvest", key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+    { group: "Sell", key: "sellEnabled", label: "Auto sell", type: "toggle" },
+    { group: "Sell", key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+    { group: "Drops", key: "collectEnabled", label: "Auto collect drops", type: "toggle" },
+    { group: "Drops", key: "collectEverything", label: "Collect everything dropped", type: "toggle" },
+    { group: "Drops", key: "collectReturn", label: "Return to my spot after", type: "toggle" },
+    { group: "Drops", key: "collectDwell", label: "Pickup dwell", type: "slider", min: 0.01, max: 2, step: 0.01, unit: "s" },
+  ];
+
+  function controlFieldHtml(control, config) {
+    const value = config[control.key];
+    if (control.type === "toggle") {
+      return `
+        <label class="control-row">
+          <span class="control-label">${escapeHtml(control.label)}</span>
+          <input type="checkbox" class="control-input" data-control="${control.key}" data-type="toggle" ${value ? "checked" : ""}>
+        </label>`;
+    }
+    const current = typeof value === "number" ? value : control.min;
+    return `
+      <div class="control-row">
+        <span class="control-label">${escapeHtml(control.label)}</span>
+        <input type="range" class="control-input" data-control="${control.key}" data-type="slider"
+               min="${control.min}" max="${control.max}" step="${control.step}" value="${current}">
+        <output class="control-value" data-output="${control.key}">${current}${control.unit || ""}</output>
+      </div>`;
+  }
+
+  function controlPanelHtml(config) {
+    const groups = [];
+    CONTROLS.forEach((control) => {
+      let group = groups.find((g) => g.name === control.group);
+      if (!group) {
+        group = { name: control.group, items: [] };
+        groups.push(group);
+      }
+      group.items.push(control);
+    });
+    return groups
+      .map(
+        (group) => `
+        <div class="detail-panel glass">
+          <h2>${escapeHtml(group.name)}</h2>
+          ${group.items.map((c) => controlFieldHtml(c, config)).join("")}
+        </div>`
+      )
+      .join("");
+  }
+
+  function viewControl() {
+    const saved = localStorage.getItem("scriptexer_control_code") || "";
+    return `
+      <section class="view">
+        <div class="page-hero">
+          <span class="eyebrow">SCRIPTEXER · Tools</span>
+          <h1>Remote Control</h1>
+          <p>Your script shows a short link code in its panel. Enter it here to flip its switches from anywhere — no need to touch the game.</p>
+        </div>
+
+        <div class="detail-panel glass">
+          <h2>Link a script</h2>
+          <div class="control-link-row">
+            <input type="text" id="controlCode" class="admin-input" placeholder="Link code (e.g. K7QP2M)"
+                   maxlength="6" autocomplete="off" spellcheck="false" value="${escapeHtml(saved)}">
+            <button class="btn-primary" id="controlLinkBtn">Link</button>
+          </div>
+          <p class="control-status" id="controlStatus">Not linked yet.</p>
+        </div>
+
+        <div id="controlPanels"></div>
+      </section>`;
+  }
+
+  // Live state for the control page. Kept out of the DOM so a re-render
+  // of the panels never loses which session we're talking to.
+  const controlState = { code: null, config: {}, timer: null };
+
+  function renderControlStatus(session) {
+    const el = document.getElementById("controlStatus");
+    if (!el) return;
+    if (!session) {
+      el.textContent = "No script is linked to that code. Check it's still running.";
+      el.className = "control-status bad";
+      return;
+    }
+    const s = session.status || {};
+    const age = session.updated_at
+      ? Math.round((Date.now() - new Date(session.updated_at).getTime()) / 1000)
+      : null;
+    const parts = [`Linked to ${escapeHtml(s.player || "unknown player")}`];
+    if (s.planted !== undefined) parts.push(`${s.planted} planted`);
+    if (s.bought !== undefined) parts.push(`${s.bought} bought`);
+    // A stale heartbeat is the difference between "your settings will
+    // apply" and "you're editing a row nothing is reading."
+    if (age !== null) parts.push(age < 10 ? "live" : `last seen ${age}s ago`);
+    el.textContent = parts.join(" · ");
+    el.className = "control-status" + (age !== null && age < 10 ? " good" : "");
+  }
+
+  async function refreshControl(code, rebuild) {
+    let session;
+    try {
+      session = await Control.fetchSession(code);
+    } catch (e) {
+      renderControlStatus(null);
+      return;
+    }
+    renderControlStatus(session);
+    if (!session) return;
+
+    controlState.code = code;
+    if (rebuild) {
+      controlState.config = session.config || {};
+      const panels = document.getElementById("controlPanels");
+      if (panels) panels.innerHTML = controlPanelHtml(controlState.config);
+      localStorage.setItem("scriptexer_control_code", code);
+    }
+  }
+
+  function bindControlEvents() {
+    const linkBtn = document.getElementById("controlLinkBtn");
+    const codeInput = document.getElementById("controlCode");
+    if (!linkBtn || !codeInput) return;
+
+    const link = () => {
+      const code = codeInput.value.trim().toUpperCase();
+      if (!code) return;
+      refreshControl(code, true);
+      clearInterval(controlState.timer);
+      // Poll for the script's heartbeat, but never rebuild the form —
+      // that would yank a slider out from under your finger.
+      controlState.timer = setInterval(() => refreshControl(code, false), 4000);
+    };
+
+    linkBtn.addEventListener("click", link);
+    codeInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") link();
+    });
+    if (codeInput.value.trim()) link();
+
+    const panels = document.getElementById("controlPanels");
+    if (!panels) return;
+
+    const send = async (key, value) => {
+      if (!controlState.code) return;
+      controlState.config[key] = value;
+      try {
+        await Control.updateConfig(controlState.code, { [key]: value });
+      } catch (e) {
+        showToast(e.message || "Couldn't reach the script");
+      }
+    };
+
+    panels.addEventListener("change", (e) => {
+      const input = e.target.closest("[data-control]");
+      if (!input) return;
+      const key = input.getAttribute("data-control");
+      if (input.getAttribute("data-type") === "toggle") {
+        send(key, input.checked);
+      } else {
+        send(key, parseFloat(input.value));
+      }
+    });
+
+    // Sliders report while dragging so the number tracks your finger,
+    // but only the settled value is sent, on `change`.
+    panels.addEventListener("input", (e) => {
+      const input = e.target.closest('[data-type="slider"]');
+      if (!input) return;
+      const key = input.getAttribute("data-control");
+      const out = panels.querySelector(`[data-output="${key}"]`);
+      const control = CONTROLS.find((c) => c.key === key);
+      if (out) out.textContent = input.value + (control && control.unit ? control.unit : "");
+    });
+  }
+
   // EXECUTOR DETAIL
   function viewExecutor(executorId) {
     const ex = DATA.executors.find((e) => e.id === executorId);
@@ -1466,6 +1652,9 @@ runScript(toRun)
     } else if (route === "/loader") {
       html = viewLoader();
       activeRoute = "/loader";
+    } else if (route === "/control") {
+      html = viewControl();
+      activeRoute = "/control";
     } else if (route === "/discord" || route === "discord") {
       html = viewHome("");
       activeRoute = "/";
@@ -1480,6 +1669,8 @@ runScript(toRun)
     setActiveNav(activeRoute);
     bindViewEvents();
     bindAdminEvents();
+    if (route === "/control") bindControlEvents();
+    else clearInterval(controlState.timer);
     initMotion(app);
 
     const view = app.querySelector(".view");
@@ -1815,6 +2006,7 @@ runScript(toRun)
     let activeRoute = "/";
     if (route === "/executors" || route.startsWith("/executor/")) activeRoute = "/executors";
     else if (route === "/loader") activeRoute = "/loader";
+    else if (route === "/control") activeRoute = "/control";
     positionNavIndicator(activeRoute);
   });
 

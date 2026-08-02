@@ -1256,3 +1256,53 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 ::selection { background: rgba(255, 255, 255, 0.85); color: #000; }
+
+/* ---------- Remote control page ---------- */
+.control-link-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.control-link-row .admin-input {
+  flex: 1 1 180px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.control-status {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.control-status.good { color: #78ffaa; }
+.control-status.bad { color: #ff8c8c; }
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.control-row:last-child { border-bottom: none; }
+.control-label {
+  flex: 1 1 auto;
+  font-size: 0.9rem;
+}
+.control-row input[type="range"] {
+  flex: 0 1 200px;
+  accent-color: #78ffaa;
+}
+.control-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: #78ffaa;
+}
+.control-value {
+  flex: 0 0 62px;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}

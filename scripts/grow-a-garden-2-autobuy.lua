@@ -2240,3 +2240,168 @@ runBuyLoop(GearsStock, PurchaseGears, "Gears")
 runBuyLoop(CratesStock, PurchaseCrates, "Crates")
 
 setActivePage("Buy")
+
+--========================================================
+-- REMOTE CONTROL
+--
+-- Shows a short link code in the panel. Enter that code at
+-- scriptexer's /control page and the site can flip the same
+-- switches from your phone or PC, without touching the game.
+--
+-- Config is a single row in Supabase keyed by the code. The script
+-- polls it and applies whatever changed; it also writes back a little
+-- status so the site can show what's actually happening in-game.
+--========================================================
+do
+	local HttpService = game:GetService("HttpService")
+
+	local SUPABASE_URL = "https://fscazttvhgwaqxkdphsp.supabase.co"
+	local SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzY2F6dHR2aGd3YXF4a2RwaHNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MzI0NTYsImV4cCI6MjEwMTEwODQ1Nn0.WWKLNM6ZQZKF2DVne0diOaT3ZB7apbbbuk1lTH-b4L8"
+
+	-- Executors expose their raw HTTP function under several names.
+	local httpRequest = (syn and syn.request)
+		or (http and http.request)
+		or http_request
+		or request
+
+	-- Ambiguous characters are left out so a code read off a screen and
+	-- typed on a phone can't turn into a different one.
+	local ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	local function makeCode()
+		local out = {}
+		for _ = 1, 6 do
+			local i = math.random(1, #ALPHABET)
+			table.insert(out, ALPHABET:sub(i, i))
+		end
+		return table.concat(out)
+	end
+
+	local Code = makeCode()
+
+	local function call(method, path, body)
+		if not httpRequest then return nil end
+		local ok, res = pcall(httpRequest, {
+			Url = SUPABASE_URL .. "/rest/v1/" .. path,
+			Method = method,
+			Headers = {
+				["apikey"] = SUPABASE_KEY,
+				["Authorization"] = "Bearer " .. SUPABASE_KEY,
+				["Content-Type"] = "application/json",
+				["Prefer"] = "resolution=merge-duplicates,return=representation",
+			},
+			Body = body and HttpService:JSONEncode(body) or nil,
+		})
+		if not ok or not res then return nil end
+		local okDecode, decoded = pcall(function()
+			return HttpService:JSONDecode(res.Body)
+		end)
+		return okDecode and decoded or nil
+	end
+
+	--------------------------------------------------------
+	-- Applying config from the site.
+	--
+	-- Every key is optional: the site only sends what it changed, and a
+	-- missing key must leave the in-game value alone rather than reset
+	-- it to a default.
+	--------------------------------------------------------
+	local function num(value, current, min, max)
+		if type(value) ~= "number" then return current end
+		if value < min then return min end
+		if value > max then return max end
+		return value
+	end
+
+	local function bool(value, current)
+		if type(value) ~= "boolean" then return current end
+		return value
+	end
+
+	local function applyConfig(config)
+		if type(config) ~= "table" then return end
+
+		BuyInterval = num(config.buyInterval, BuyInterval, 0.001, 10)
+
+		PlantEnabled = bool(config.plantEnabled, PlantEnabled)
+		PlantInterval = num(config.plantInterval, PlantInterval, 0.001, 10)
+
+		HarvestEnabled = bool(config.harvestEnabled, HarvestEnabled)
+		HarvestInterval = num(config.harvestInterval, HarvestInterval, 0.001, 10)
+
+		SellEnabled = bool(config.sellEnabled, SellEnabled)
+		SellInterval = num(config.sellInterval, SellInterval, 0.001, 10)
+
+		CollectEnabled = bool(config.collectEnabled, CollectEnabled)
+		CollectEverything = bool(config.collectEverything, CollectEverything)
+		CollectReturn = bool(config.collectReturn, CollectReturn)
+		CollectDwell = num(config.collectDwell, CollectDwell, 0.01, 2)
+
+		-- Seed selection, sent as a list of names.
+		if type(config.plantSeeds) == "table" then
+			PlantSelected = {}
+			for _, name in ipairs(config.plantSeeds) do
+				if type(name) == "string" then PlantSelected[name] = true end
+			end
+		end
+	end
+
+	local function currentStatus()
+		return {
+			place = tostring(game.PlaceId),
+			player = Players.LocalPlayer.Name,
+			planted = PlantConfirmedCount,
+			plantSent = PlantFiredCount,
+			lastSeed = PlantLastFired,
+			bought = BuyFiredCount,
+			plantEnabled = PlantEnabled,
+			harvestEnabled = HarvestEnabled,
+			sellEnabled = SellEnabled,
+			collectEnabled = CollectEnabled,
+		}
+	end
+
+	--------------------------------------------------------
+	-- The code label, tucked under the title.
+	--------------------------------------------------------
+	local codeLabel = Instance.new("TextLabel")
+	codeLabel.BackgroundTransparency = 1
+	codeLabel.Position = UDim2.new(0, 16, 0, 30)
+	codeLabel.Size = UDim2.new(1, -32, 0, 14)
+	codeLabel.Font = Enum.Font.Code
+	codeLabel.Text = httpRequest and ("link code: " .. Code) or "link code: unavailable (no HTTP)"
+	codeLabel.TextColor3 = httpRequest and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
+	codeLabel.TextSize = 11
+	codeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	codeLabel.Parent = frame
+
+	if httpRequest then
+		-- Register, then poll. Registration is retried by the same loop,
+		-- so a hiccup at startup doesn't leave the code dead forever.
+		local registered = false
+		task.spawn(function()
+			while true do
+				if not registered then
+					local rows = call("POST", "sessions", {
+						{ code = Code, config = {}, status = currentStatus() },
+					})
+					registered = rows ~= nil
+				else
+					local rows = call(
+						"GET",
+						"sessions?code=eq." .. Code .. "&select=config",
+						nil
+					)
+					if type(rows) == "table" and rows[1] then
+						applyConfig(rows[1].config)
+					end
+					call("PATCH", "sessions?code=eq." .. Code, { status = currentStatus() })
+				end
+				task.wait(2)
+			end
+		end)
+
+		if setclipboard then
+			pcall(setclipboard, Code)
+		end
+	end
+end

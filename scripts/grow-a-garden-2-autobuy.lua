@@ -1075,13 +1075,13 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 384, Sell = 90, Stats = 232 }
+local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 384, Sell = 90, Stats = 268 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
-frame.Position = UDim2.new(1, -18, 0, 18)
+frame.Position = UDim2.new(1, -18, 0, 50)
 frame.Size = UDim2.new(0, 344, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
@@ -1164,6 +1164,11 @@ end
 -- Setters for the widgets the site can drive, keyed by the same names
 -- the remote config uses. Populated at each widget's call site.
 local RemoteWidgets = {}
+
+-- Readers the remote-control status block calls for values that are
+-- created further down the file than it is.
+local RemoteFps = nil
+local RemoteLowPower = nil
 
 -- Repaint hooks for the list-based tabs, which have no single widget to
 -- set: applying a selection remotely has to redraw whole rows.
@@ -2712,6 +2717,12 @@ do
 		CollectReturn = switch("collectReturn", config.collectReturn, CollectReturn)
 		CollectDwell = slider("collectDwell", config.collectDwell, CollectDwell, 0.01, 2)
 
+		-- Low power lives further down the file than this block, so it's
+		-- driven purely through its widget, which owns the variable.
+		if type(config.lowPower) == "boolean" and RemoteWidgets.lowPower then
+			RemoteWidgets.lowPower(config.lowPower)
+		end
+
 		-- Shop selection, per category.
 		local rebuiltBuy = false
 		for _, category in ipairs({ "Seeds", "Gears", "Crates" }) do
@@ -2778,7 +2789,9 @@ do
 				collectEverything = CollectEverything,
 				collectReturn = CollectReturn,
 				collectDwell = CollectDwell,
+				lowPower = RemoteLowPower and RemoteLowPower() or false,
 			},
+			fps = RemoteFps and RemoteFps() or nil,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
 			-- asking you to type item names.
@@ -2855,4 +2868,109 @@ do
 			pcall(setclipboard, Code)
 		end
 	end
+end
+
+--========================================================
+-- PERFORMANCE — an FPS pill, and a mode that stops drawing the world.
+--
+-- 3D rendering is what costs frames; the game's own Sheckles display
+-- and this panel are 2D, so switching off the world leaves everything
+-- you actually watch while farming, at a fraction of the cost.
+--========================================================
+local LowPower = false
+
+do
+	local RunService = game:GetService("RunService")
+
+	local perfGui = Instance.new("ScreenGui")
+	perfGui.Name = "ScriptexerPerf"
+	perfGui.ResetOnSpawn = false
+	perfGui.IgnoreGuiInset = true
+	perfGui.Parent = gui.Parent
+
+	local pill = Instance.new("Frame")
+	pill.AnchorPoint = Vector2.new(1, 0)
+	pill.Position = UDim2.new(1, -18, 0, 18)
+	pill.Size = UDim2.new(0, 74, 0, 24)
+	pill.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
+	pill.BackgroundTransparency = 0.04
+	pill.BorderSizePixel = 0
+	pill.Parent = perfGui
+
+	local pillCorner = Instance.new("UICorner")
+	pillCorner.CornerRadius = UDim.new(1, 0)
+	pillCorner.Parent = pill
+
+	local pillStroke = Instance.new("UIStroke")
+	pillStroke.Color = Color3.fromRGB(255, 255, 255)
+	pillStroke.Transparency = 0.88
+	pillStroke.Parent = pill
+
+	local fpsLabel = Instance.new("TextLabel")
+	fpsLabel.BackgroundTransparency = 1
+	fpsLabel.Size = UDim2.new(1, 0, 1, 0)
+	fpsLabel.Font = Enum.Font.GothamBold
+	fpsLabel.Text = "-- fps"
+	fpsLabel.TextColor3 = Color3.fromRGB(230, 230, 235)
+	fpsLabel.TextSize = 12
+	fpsLabel.Parent = pill
+
+	-- Averaged over the last second rather than 1/delta per frame, which
+	-- jitters far too much to read.
+	task.spawn(function()
+		local frames = 0
+		RunService.RenderStepped:Connect(function()
+			frames += 1
+		end)
+		while true do
+			local started = tick()
+			task.wait(1)
+			local fps = frames / math.max(tick() - started, 0.001)
+			frames = 0
+			RemoteFps = function() return math.floor(fps + 0.5) end
+			fpsLabel.Text = string.format("%d fps", math.floor(fps + 0.5))
+			fpsLabel.TextColor3 = fps >= 45 and Color3.fromRGB(120, 255, 170)
+				or fps >= 20 and Color3.fromRGB(255, 220, 130)
+				or Color3.fromRGB(255, 140, 140)
+		end
+	end)
+
+	--------------------------------------------------------
+	-- Turning the world off.
+	--
+	-- Set3dRenderingEnabled is the real win and most executors expose
+	-- it, but it isn't universal — so the quality/lighting fallbacks
+	-- run too, and something still improves either way.
+	--------------------------------------------------------
+	local Lighting = game:GetService("Lighting")
+	local saved = nil
+
+	local function applyLowPower(on)
+		pcall(function() RunService:Set3dRenderingEnabled(not on) end)
+
+		pcall(function()
+			local userSettings = settings()
+			if on then
+				saved = saved or {
+					quality = userSettings.Rendering.QualityLevel,
+					globalShadows = Lighting.GlobalShadows,
+					fogEnd = Lighting.FogEnd,
+				}
+				userSettings.Rendering.QualityLevel = Enum.QualityLevel.Level01
+				Lighting.GlobalShadows = false
+				Lighting.FogEnd = 9e9
+			elseif saved then
+				userSettings.Rendering.QualityLevel = saved.quality
+				Lighting.GlobalShadows = saved.globalShadows
+				Lighting.FogEnd = saved.fogEnd
+			end
+		end)
+	end
+
+	RemoteLowPower = function() return LowPower end
+
+	RemoteWidgets.lowPower = select(2, createToggleRow(statsPage, 232, "Low power (stop drawing the world)", LowPower, function(state)
+		LowPower = state
+		applyLowPower(state)
+	end))
 end

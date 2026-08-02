@@ -899,7 +899,11 @@ runScript(toRun)
         { key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
     },
-    { name: "Stats", stats: true },
+    {
+      name: "Stats",
+      stats: true,
+      controls: [{ key: "lowPower", label: "Low power (stop drawing the world)", type: "toggle" }],
+    },
     { name: "Presets", presets: true },
   ];
 
@@ -950,6 +954,7 @@ runScript(toRun)
     const s = status || {};
     const rate = typeof s.perSecond === "number" ? s.perSecond : null;
     const rows = [
+      ["FPS", typeof s.fps === "number" ? String(s.fps) : "—", s.fps >= 45 ? "good" : s.fps >= 20 ? "" : "bad"],
       ["Elapsed time", hudElapsed(s.elapsed), ""],
       ["Earned so far", hudNumber(s.earned), "good"],
       ["Spent so far", hudNumber(s.spent), "bad"],
@@ -1122,7 +1127,7 @@ runScript(toRun)
         </div>
         <div class="hud-body">
           ${tab.stats
-            ? hudStatsHtml(status)
+            ? hudStatsHtml(status) + (tab.controls || []).map((c) => hudControlHtml(c, config)).join("")
             : tab.presets
             ? hudPresetsHtml(status)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +

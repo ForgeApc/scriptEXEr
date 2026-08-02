@@ -1249,9 +1249,34 @@ local function matchesCollectFilter(name)
 	return false
 end
 
-local function getRoot()
+-- Drop helpers live on one table: the main chunk is at Lua's
+-- 200-locals ceiling, and these would otherwise cost two.
+local Drop = {}
+
+function Drop.getRoot()
 	local character = Players.LocalPlayer.Character
 	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+-- Anything growing on a plot is not a drop. Plants and their fruit carry
+-- their own prompts (harvesting is a prompt too), so without this the
+-- collector treats a whole garden as loot and teleports around
+-- harvesting things you never asked it to touch.
+function Drop.isGarden(prompt)
+	local node = prompt.Parent
+	local depth = 0
+	while node and node ~= Workspace and depth < 8 do
+		if node:GetAttribute("PlantId") ~= nil or node:GetAttribute("Owner") ~= nil then
+			return true
+		end
+		local name = node.Name
+		if name == "Plants" or name == "Gardens" or name == "Fruits" then
+			return true
+		end
+		node = node.Parent
+		depth += 1
+	end
+	return false
 end
 
 -- What to call a prompt's item, for filtering and for the status line.
@@ -1299,7 +1324,7 @@ end
 
 local function collectDrop(prompt)
 	if not prompt or not prompt.Parent then return false end
-	local root = getRoot()
+	local root = Drop.getRoot()
 	if not root then return false end
 	local position = promptPosition(prompt)
 	if not position then return false end
@@ -1310,7 +1335,7 @@ local function collectDrop(prompt)
 	triggerPrompt(prompt)
 
 	if CollectReturn then
-		local rootNow = getRoot()
+		local rootNow = Drop.getRoot()
 		if rootNow then rootNow.CFrame = origin end
 	end
 	return true
@@ -1321,6 +1346,7 @@ Workspace.DescendantAdded:Connect(function(inst)
 	-- stream in, and the class check rejects almost everything.
 	if not CollectEnabled then return end
 	if not inst:IsA("ProximityPrompt") then return end
+	if Drop.isGarden(inst) then return end
 	if not matchesCollectFilter(promptName(inst)) then return end
 	table.insert(CollectPending, inst)
 end)
@@ -1329,6 +1355,11 @@ task.spawn(function()
 	while task.wait(0.05) do
 		if CollectEnabled and #CollectPending > 0 then
 			local target = table.remove(CollectPending, 1)
+			-- Re-checked here as well: a prompt can be queued before its
+			-- plant finishes parenting into the plot.
+			if target and target.Parent and Drop.isGarden(target) then
+				target = nil
+			end
 			local name = "?"
 			pcall(function() name = promptName(target) end)
 			local ok, collected = pcall(collectDrop, target)

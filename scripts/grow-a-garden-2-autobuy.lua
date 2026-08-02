@@ -1113,6 +1113,10 @@ end
 
 -- A draggable slider row: label + track + fill + knob. Calls onChange(value)
 -- live while dragging, and once on creation with the default value.
+-- Setters for the widgets the site can drive, keyed by the same names
+-- the remote config uses. Populated at each widget's call site.
+local RemoteWidgets = {}
+
 local function createSlider(parent, y, labelText, min, max, default, unit, onChange)
 	local row = Instance.new("Frame")
 	row.BackgroundTransparency = 1
@@ -1248,7 +1252,13 @@ local function createSlider(parent, y, labelText, min, max, default, unit, onCha
 	end)
 
 	setFromAlpha((default - min) / (max - min))
-	return row
+
+	-- Second return is a setter, so something other than the user's
+	-- finger — the site, over remote control — can move the slider and
+	-- have it look moved.
+	return row, function(value)
+		setFromAlpha((math.clamp(value, min, max) - min) / (max - min))
+	end
 end
 
 -- A labeled on/off switch row.
@@ -1303,7 +1313,14 @@ local function createToggleRow(parent, y, labelText, default, onChange)
 		onChange(state)
 	end)
 
-	return row
+	-- Second return lets remote control flip the switch for real: the
+	-- knob slides over, not just the underlying value.
+	return row, function(value)
+		if state == value then return end
+		state = value
+		paint()
+		onChange(state)
+	end
 end
 
 -- A "label ... value" stat row. Returns the value label so callers can
@@ -1419,9 +1436,9 @@ local categories = {
 local subTabButtons = {}
 local activeSubTab = "All"
 
-createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(v)
+RemoteWidgets.buyInterval = select(2, createSlider(buyPage, 36, "Buy interval", 0.001, 10, BuyInterval, "s", function(v)
 	BuyInterval = v
-end)
+end))
 
 -- Live proof the loop is actually running: Selected is counted
 -- directly from your toggles (independent of whether the loop has run
@@ -1687,13 +1704,13 @@ buildList(activeSubTab)
 --========================================================
 local plantPage = pages.Plant
 
-createToggleRow(plantPage, 0, "Enable Auto Plant", PlantEnabled, function(state)
+RemoteWidgets.plantEnabled = select(2, createToggleRow(plantPage, 0, "Enable Auto Plant", PlantEnabled, function(state)
 	PlantEnabled = state
-end)
+end))
 
-createSlider(plantPage, 32, "Plant delay", 0.001, 10, PlantInterval, "s", function(v)
+RemoteWidgets.plantInterval = select(2, createSlider(plantPage, 32, "Plant delay", 0.001, 10, PlantInterval, "s", function(v)
 	PlantInterval = v
-end)
+end))
 
 -- Placement mode selector
 local plantModeRow = Instance.new("Frame")
@@ -1918,21 +1935,21 @@ end)
 --========================================================
 local dropsPage = pages.Drops
 
-createToggleRow(dropsPage, 0, "Enable Auto Collect", CollectEnabled, function(state)
+RemoteWidgets.collectEnabled = select(2, createToggleRow(dropsPage, 0, "Enable Auto Collect", CollectEnabled, function(state)
 	CollectEnabled = state
-end)
+end))
 
-createToggleRow(dropsPage, 30, "Return to my spot after", CollectReturn, function(state)
+RemoteWidgets.collectReturn = select(2, createToggleRow(dropsPage, 30, "Return to my spot after", CollectReturn, function(state)
 	CollectReturn = state
-end)
+end))
 
-createToggleRow(dropsPage, 60, "Collect everything dropped", CollectEverything, function(state)
+RemoteWidgets.collectEverything = select(2, createToggleRow(dropsPage, 60, "Collect everything dropped", CollectEverything, function(state)
 	CollectEverything = state
-end)
+end))
 
-createSlider(dropsPage, 94, "Pickup dwell", 0.01, 2, CollectDwell, "s", function(v)
+RemoteWidgets.collectDwell = select(2, createSlider(dropsPage, 94, "Pickup dwell", 0.01, 2, CollectDwell, "s", function(v)
 	CollectDwell = v
-end)
+end))
 
 local dropsStatusLabel = Instance.new("TextLabel")
 dropsStatusLabel.BackgroundTransparency = 1
@@ -2084,9 +2101,9 @@ end)
 --========================================================
 local harvestPage = pages.Harvest
 
-createToggleRow(harvestPage, 0, "Enable Auto Harvest", HarvestEnabled, function(state)
+RemoteWidgets.harvestEnabled = select(2, createToggleRow(harvestPage, 0, "Enable Auto Harvest", HarvestEnabled, function(state)
 	HarvestEnabled = state
-end)
+end))
 
 local harvestNote = Instance.new("TextLabel")
 harvestNote.BackgroundTransparency = 1
@@ -2101,22 +2118,22 @@ harvestNote.TextXAlignment = Enum.TextXAlignment.Left
 harvestNote.TextYAlignment = Enum.TextYAlignment.Top
 harvestNote.Parent = harvestPage
 
-createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
+RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
 	HarvestInterval = v
-end)
+end))
 
 --========================================================
 -- SELL page
 --========================================================
 local sellPage = pages.Sell
 
-createToggleRow(sellPage, 0, "Enable Auto Sell", SellEnabled, function(state)
+RemoteWidgets.sellEnabled = select(2, createToggleRow(sellPage, 0, "Enable Auto Sell", SellEnabled, function(state)
 	SellEnabled = state
-end)
+end))
 
-createSlider(sellPage, 36, "Sell delay", 0.001, 10, SellInterval, "s", function(v)
+RemoteWidgets.sellInterval = select(2, createSlider(sellPage, 36, "Sell delay", 0.001, 10, SellInterval, "s", function(v)
 	SellInterval = v
-end)
+end))
 
 --========================================================
 -- STATS page
@@ -2317,24 +2334,42 @@ do
 		return value
 	end
 
+	-- Drive the on-screen widget rather than the variable directly. The
+	-- widget's own onChange sets the variable, so the switch and the
+	-- value can never disagree — a remote change looks exactly like one
+	-- made by hand.
 	local function applyConfig(config)
 		if type(config) ~= "table" then return end
 
-		BuyInterval = num(config.buyInterval, BuyInterval, 0.001, 10)
+		local function slider(key, value, current, min, max)
+			local v = num(value, current, min, max)
+			local set = RemoteWidgets[key]
+			if set and v ~= current then set(v) end
+			return v
+		end
 
-		PlantEnabled = bool(config.plantEnabled, PlantEnabled)
-		PlantInterval = num(config.plantInterval, PlantInterval, 0.001, 10)
+		local function switch(key, value, current)
+			local v = bool(value, current)
+			local set = RemoteWidgets[key]
+			if set and v ~= current then set(v) end
+			return v
+		end
 
-		HarvestEnabled = bool(config.harvestEnabled, HarvestEnabled)
-		HarvestInterval = num(config.harvestInterval, HarvestInterval, 0.001, 10)
+		BuyInterval = slider("buyInterval", config.buyInterval, BuyInterval, 0.001, 10)
 
-		SellEnabled = bool(config.sellEnabled, SellEnabled)
-		SellInterval = num(config.sellInterval, SellInterval, 0.001, 10)
+		PlantEnabled = switch("plantEnabled", config.plantEnabled, PlantEnabled)
+		PlantInterval = slider("plantInterval", config.plantInterval, PlantInterval, 0.001, 10)
 
-		CollectEnabled = bool(config.collectEnabled, CollectEnabled)
-		CollectEverything = bool(config.collectEverything, CollectEverything)
-		CollectReturn = bool(config.collectReturn, CollectReturn)
-		CollectDwell = num(config.collectDwell, CollectDwell, 0.01, 2)
+		HarvestEnabled = switch("harvestEnabled", config.harvestEnabled, HarvestEnabled)
+		HarvestInterval = slider("harvestInterval", config.harvestInterval, HarvestInterval, 0.001, 10)
+
+		SellEnabled = switch("sellEnabled", config.sellEnabled, SellEnabled)
+		SellInterval = slider("sellInterval", config.sellInterval, SellInterval, 0.001, 10)
+
+		CollectEnabled = switch("collectEnabled", config.collectEnabled, CollectEnabled)
+		CollectEverything = switch("collectEverything", config.collectEverything, CollectEverything)
+		CollectReturn = switch("collectReturn", config.collectReturn, CollectReturn)
+		CollectDwell = slider("collectDwell", config.collectDwell, CollectDwell, 0.01, 2)
 
 		-- Seed selection, sent as a list of names.
 		if type(config.plantSeeds) == "table" then

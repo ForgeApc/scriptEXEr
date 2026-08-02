@@ -1460,3 +1460,6 @@ body {
   font-size: 0.72rem;
 }
 .hud-preset-name::placeholder { color: #82828a; }
+
+/* Harvest's switches mean "skip this crop", so they read red, not green. */
+.hud-toggle.on.exclude { background: #ff8c8c; }

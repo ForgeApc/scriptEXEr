@@ -419,12 +419,29 @@ local function isGrown(plant)
 	return currentAge >= maxAge
 end
 
+-- Crops you never want picked. Keyed by the shop seed name the Harvest
+-- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
+-- matching is loose in the same way planting's is.
+local HarvestExcluded = {}
+
+local function isHarvestExcluded(plantName)
+	local name = plantName:lower()
+	for seedName, on in pairs(HarvestExcluded) do
+		if on then
+			local wanted = seedName:lower()
+			if name == wanted or name:find(wanted, 1, true) then return true end
+		end
+	end
+	return false
+end
+
 local function getHarvestTargets()
 	local targets = {}
 	local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
 	if not plantsFolder then return targets end
 
 	for _, plant in pairs(plantsFolder:GetChildren()) do
+		if isHarvestExcluded(plant.Name) then continue end
 		local fruitsFolder = plant:FindFirstChild("Fruits")
 		if fruitsFolder then
 			for _, fruit in pairs(fruitsFolder:GetChildren()) do
@@ -2182,6 +2199,135 @@ RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 76, "Harvest
 	HarvestInterval = v
 end))
 
+-- Exclusion list. Everything is harvested by default; ticking a crop
+-- here leaves it in the ground.
+do
+	local excludeNote = Instance.new("TextLabel")
+	excludeNote.BackgroundTransparency = 1
+	excludeNote.Position = UDim2.new(0, 16, 0, 116)
+	excludeNote.Size = UDim2.new(1, -32, 0, 16)
+	excludeNote.Font = Enum.Font.Gotham
+	excludeNote.Text = "Don't harvest these:"
+	excludeNote.TextColor3 = Color3.fromRGB(200, 200, 205)
+	excludeNote.TextSize = 12
+	excludeNote.TextXAlignment = Enum.TextXAlignment.Left
+	excludeNote.Parent = harvestPage
+
+	local bulkRow = Instance.new("Frame")
+	bulkRow.BackgroundTransparency = 1
+	bulkRow.Position = UDim2.new(0, 16, 0, 136)
+	bulkRow.Size = UDim2.new(1, -32, 0, 24)
+	bulkRow.Parent = harvestPage
+
+	local bulkLayout = Instance.new("UIListLayout")
+	bulkLayout.FillDirection = Enum.FillDirection.Horizontal
+	bulkLayout.Padding = UDim.new(0, 6)
+	bulkLayout.Parent = bulkRow
+
+	local excludeAllBtn = pillButton(bulkRow, "Exclude All", 90)
+	local excludeNoneBtn = pillButton(bulkRow, "None", 90)
+
+	local list = Instance.new("ScrollingFrame")
+	list.Position = UDim2.new(0, 16, 0, 166)
+	list.Size = UDim2.new(1, -32, 1, -176)
+	list.BackgroundTransparency = 1
+	list.CanvasSize = UDim2.new(0, 0, 0, 0)
+	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	list.ScrollBarThickness = 3
+	list.ScrollBarImageTransparency = 0.4
+	list.BorderSizePixel = 0
+	list.Parent = harvestPage
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 4)
+	listLayout.Parent = list
+
+	local entries = {}
+	local names = {}
+	for _, item in ipairs(SeedsStock:GetChildren()) do
+		table.insert(names, item.Name)
+	end
+	table.sort(names)
+
+	for _, name in ipairs(names) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 28)
+		row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		row.BackgroundTransparency = 0.93
+		row.Parent = list
+
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 8)
+		rowCorner.Parent = row
+
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Position = UDim2.new(0, 10, 0, 0)
+		label.Size = UDim2.new(1, -46, 1, 0)
+		label.Font = Enum.Font.Gotham
+		label.Text = name
+		label.TextColor3 = Color3.fromRGB(230, 230, 235)
+		label.TextSize = 12
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.TextTruncate = Enum.TextTruncate.AtEnd
+		label.Parent = row
+
+		local toggle = Instance.new("TextButton")
+		toggle.Position = UDim2.new(1, -34, 0.5, -9)
+		toggle.Size = UDim2.new(0, 26, 0, 18)
+		toggle.AutoButtonColor = false
+		toggle.Text = ""
+		toggle.Parent = row
+
+		local toggleCorner = Instance.new("UICorner")
+		toggleCorner.CornerRadius = UDim.new(1, 0)
+		toggleCorner.Parent = toggle
+
+		local knob = Instance.new("Frame")
+		knob.Size = UDim2.new(0, 14, 0, 14)
+		knob.Position = UDim2.new(0, 2, 0.5, -7)
+		knob.Parent = toggle
+		local knobCorner = Instance.new("UICorner")
+		knobCorner.CornerRadius = UDim.new(1, 0)
+		knobCorner.Parent = knob
+
+		local function paint()
+			local on = HarvestExcluded[name] == true
+			-- Red when on: this switch means "skip", not "do".
+			toggle.BackgroundColor3 = on and Color3.fromRGB(255, 140, 140) or Color3.fromRGB(60, 60, 64)
+			knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+			knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+		end
+		paint()
+
+		toggle.MouseButton1Click:Connect(function()
+			HarvestExcluded[name] = not (HarvestExcluded[name] == true)
+			paint()
+		end)
+
+		table.insert(entries, { name = name, paint = paint })
+	end
+
+	RemoteRepaint.harvestExcluded = function()
+		for _, entry in ipairs(entries) do
+			entry.paint()
+		end
+	end
+
+	excludeAllBtn.MouseButton1Click:Connect(function()
+		for _, entry in ipairs(entries) do
+			HarvestExcluded[entry.name] = true
+			entry.paint()
+		end
+	end)
+	excludeNoneBtn.MouseButton1Click:Connect(function()
+		for _, entry in ipairs(entries) do
+			HarvestExcluded[entry.name] = false
+			entry.paint()
+		end
+	end)
+end
+
 --========================================================
 -- SELL page
 --========================================================
@@ -2459,6 +2605,10 @@ do
 			RemoteRepaint.drops()
 		end
 
+		if applySelection(HarvestExcluded, config.harvestExcluded) and RemoteRepaint.harvestExcluded then
+			RemoteRepaint.harvestExcluded()
+		end
+
 		if config.plantMode == "me" or config.plantMode == "random" or config.plantMode == "fixed" then
 			if config.plantMode ~= PlantMode and RemoteRepaint.plantMode then
 				RemoteRepaint.plantMode(config.plantMode)
@@ -2516,6 +2666,7 @@ do
 				Crates = RemoteSelectedList(Selected.Crates),
 				plant = RemoteSelectedList(PlantSelected),
 				drops = RemoteSelectedList(CollectSelected),
+				harvestExcluded = RemoteSelectedList(HarvestExcluded),
 			},
 		}
 	end

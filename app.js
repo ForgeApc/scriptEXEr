@@ -890,6 +890,7 @@ runScript(toRun)
         { note: "Harvests ripe crops first, then attempts still-growing ones too." },
         { key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
+      list: "harvest",
     },
     {
       name: "Sell",
@@ -989,7 +990,7 @@ runScript(toRun)
       });
       return out;
     }
-    // Plant and Drops both list seeds.
+    // Plant, Drops and Harvest all list seeds.
     return (items.Seeds || []).map((it) => ({ name: it.name, category: "Seeds" }));
   }
 
@@ -997,6 +998,7 @@ runScript(toRun)
     const sel = (status && status.selected) || {};
     if (kind === "plant") return new Set(sel.plant || []);
     if (kind === "drops") return new Set(sel.drops || []);
+    if (kind === "harvest") return new Set(sel.harvestExcluded || []);
     const cats = subTab === "All" ? ["Seeds", "Gears", "Crates"] : [subTab];
     const set = new Set();
     cats.forEach((cat) => (sel[cat] || []).forEach((n) => set.add(cat + "\u0000" + n)));
@@ -1018,9 +1020,11 @@ runScript(toRun)
             )
             .join("")}</div>`
         : "";
+    const heading =
+      kind === "harvest" ? `<div class="hud-note">Don't harvest these:</div>` : "";
     const bulk = `
       <div class="hud-bulk">
-        <button class="hud-pill" data-bulk="all">Select All</button>
+        <button class="hud-pill" data-bulk="all">${kind === "harvest" ? "Exclude All" : "Select All"}</button>
         <button class="hud-pill" data-bulk="none">None</button>
         ${kind === "buy"
           ? ["Seeds", "Gears", "Crates"]
@@ -1038,13 +1042,13 @@ runScript(toRun)
           ${it.inStock === undefined
             ? ""
             : `<span class="hud-stock ${it.inStock ? "in" : "out"}">${it.inStock ? "In stock" : "Out of stock"}</span>`}
-          <button class="hud-toggle${on ? " on" : ""}" data-item="${escapeHtml(it.name)}"
+          <button class="hud-toggle${on ? (kind === "harvest" ? " on exclude" : " on") : ""}" data-item="${escapeHtml(it.name)}"
                   data-category="${it.category}" role="switch" aria-checked="${on}"
                   aria-label="${escapeHtml(it.name)}"><span class="hud-knob"></span></button>
         </div>`;
       })
       .join("");
-    return subTabs + bulk + `<div class="hud-list">${rows}</div>`;
+    return heading + subTabs + bulk + `<div class="hud-list">${rows}</div>`;
   }
 
   function hudModesHtml(status) {
@@ -1176,7 +1180,7 @@ runScript(toRun)
     const sel = st.selected || {};
     // Settings are in here too: a switch flipped inside the game has to
     // show up on the site the same way a remote change does.
-    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, st.plantMode, st.settings]);
+    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, sel.harvestExcluded, st.plantMode, st.settings]);
   }
 
   function paintHud(rebuild) {
@@ -1233,6 +1237,7 @@ runScript(toRun)
       buyCrates: sel.Crates,
       plantSeeds: sel.plant,
       collectItems: sel.drops,
+      harvestExcluded: sel.harvestExcluded,
     };
     Object.keys(confirmed).forEach((key) => {
       const pending = controlState.config[key];
@@ -1287,6 +1292,7 @@ runScript(toRun)
           buyCrates: sel.Crates || [],
           plantSeeds: sel.plant || [],
           collectItems: sel.drops || [],
+          harvestExcluded: sel.harvestExcluded || [],
         });
         await Presets.save(owner, name, config);
         if (input) input.value = "";
@@ -1347,14 +1353,26 @@ runScript(toRun)
     // config. Keep a local copy so a click shows immediately instead of
     // waiting out the next poll.
     const selectionKey = (kind, category) =>
-      kind === "buy" ? "buy" + category : kind === "plant" ? "plantSeeds" : "collectItems";
+      kind === "buy"
+        ? "buy" + category
+        : kind === "plant"
+        ? "plantSeeds"
+        : kind === "harvest"
+        ? "harvestExcluded"
+        : "collectItems";
 
     const currentSelection = (kind, category) => {
       const key = selectionKey(kind, category);
       if (Array.isArray(controlState.config[key])) return controlState.config[key].slice();
       const sel = controlState.status.selected || {};
       const fromStatus =
-        kind === "buy" ? sel[category] : kind === "plant" ? sel.plant : sel.drops;
+        kind === "buy"
+          ? sel[category]
+          : kind === "plant"
+          ? sel.plant
+          : kind === "harvest"
+          ? sel.harvestExcluded
+          : sel.drops;
       return (fromStatus || []).slice();
     };
 
@@ -1424,6 +1442,8 @@ runScript(toRun)
           Crates: controlState.config.buyCrates || (controlState.status.selected || {}).Crates,
           plant: controlState.config.plantSeeds || (controlState.status.selected || {}).plant,
           drops: controlState.config.collectItems || (controlState.status.selected || {}).drops,
+          harvestExcluded:
+            controlState.config.harvestExcluded || (controlState.status.selected || {}).harvestExcluded,
         });
         paintHud(true);
         return;

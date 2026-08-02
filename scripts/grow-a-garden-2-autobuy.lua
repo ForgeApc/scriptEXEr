@@ -351,13 +351,29 @@ local BuyLastFired = ""
 -- through; this just keeps asking. (canAfford still exists and is
 -- used elsewhere, but is intentionally NOT checked here anymore.)
 local function runBuyLoop(stockFolder, remote, category)
+	-- The shop's contents barely change, but GetChildren allocates a
+	-- fresh table on every call — at a 0.001s interval across three
+	-- loops that is thousands of throwaway tables a second. Cache it and
+	-- refresh only when the folder actually changes.
+	local cached = stockFolder:GetChildren()
+	local function recache()
+		cached = stockFolder:GetChildren()
+	end
+	stockFolder.ChildAdded:Connect(recache)
+	stockFolder.ChildRemoved:Connect(recache)
+
 	task.spawn(function()
 		while task.wait(BuyInterval) do
-			for _, item in pairs(stockFolder:GetChildren()) do
+			for _, item in ipairs(cached) do
 				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
 					BuyFiredCount += 1
 					BuyLastFired = category .. " · " .. item.Name
-					print(string.format("[SCRIPTEXER] Buy fired #%d: %s (%s)", BuyFiredCount, item.Name, category))
+					-- No logging here. This runs once per selected item
+					-- per tick, and at a 0.001s interval with a full
+					-- selection that was tens of thousands of console
+					-- writes a second — a large source of the lag people
+					-- blamed on rendering. The Buy tab's counter already
+					-- shows the same information.
 					pcall(function()
 						remote:Fire(item.Name)
 					end)
@@ -506,10 +522,22 @@ local HarvestEnabled = false
 local HarvestInterval = 0.5
 
 task.spawn(function()
+	-- Scanning the plot means walking every plant and fruit and sorting
+	-- the result. At a 0.001s delay that dwarfs the actual harvesting,
+	-- so the scan is reused for a short window while the harvest calls
+	-- keep firing at full speed.
+	local cachedTargets, cachedAt = {}, 0
+
 	while task.wait(HarvestInterval) do
 		if HarvestEnabled and OwnerPlot then
-			for _, target in ipairs(getHarvestTargets()) do
-				harvestOne(target)
+			if tick() - cachedAt > 0.25 then
+				cachedTargets = getHarvestTargets()
+				cachedAt = tick()
+			end
+			for _, target in ipairs(cachedTargets) do
+				if target.Parent then
+					harvestOne(target)
+				end
 			end
 		end
 	end

@@ -1569,6 +1569,40 @@ bulkLayout.Parent = bulkRow
 
 local selectAllBtn = pillButton(bulkRow, "Select All", 90)
 local selectNoneBtn = pillButton(bulkRow, "None", 90)
+local buyQuery = ""
+
+-- A search field. Lives in the bulk-button row so adding it doesn't
+-- shift any list down the page.
+local function searchBox(parent, onChange)
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(0, 118, 0, 22)
+	box.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	box.BackgroundTransparency = 0.9
+	box.Font = Enum.Font.Gotham
+	box.PlaceholderText = "Search…"
+	box.PlaceholderColor3 = Color3.fromRGB(140, 140, 145)
+	box.Text = ""
+	box.TextColor3 = Color3.fromRGB(255, 255, 255)
+	box.TextSize = 11
+	box.ClearTextOnFocus = false
+	box.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = box
+
+	box:GetPropertyChangedSignal("Text"):Connect(function()
+		onChange(box.Text:lower())
+	end)
+	return box
+end
+
+-- Empty query matches everything; otherwise a plain substring, which is
+-- what people actually type.
+local function matchesQuery(name, query)
+	if query == "" then return true end
+	return name:lower():find(query, 1, true) ~= nil
+end
 
 local rowEntries = {}
 local rowConnections = {}
@@ -1590,7 +1624,9 @@ local function buildList(tab)
 	for _, cat in ipairs(categories) do
 		if showAll or cat.key == tab then
 			for _, item in ipairs(cat.stock:GetChildren()) do
-				table.insert(items, { instance = item, category = cat.key })
+				if matchesQuery(item.Name, buyQuery) then
+					table.insert(items, { instance = item, category = cat.key })
+				end
 			end
 		end
 	end
@@ -1690,11 +1726,13 @@ local function buildList(tab)
 			paint()
 		end)
 
-		table.insert(rowEntries, { name = name, category = realCategory, paint = paint })
+		table.insert(rowEntries, { name = name, category = realCategory, paint = paint, frame = row })
 	end
 end
 
 selectAllBtn.MouseButton1Click:Connect(function()
+	-- rowEntries only holds what the current filter built, so a search
+	-- narrows Select All to the visible rows, which is the point of it.
 	for _, entry in ipairs(rowEntries) do
 		Selected[entry.category][entry.name] = true
 		entry.paint()
@@ -1758,6 +1796,11 @@ buildList(activeSubTab)
 RemoteRepaint.buy = function()
 	buildList(activeSubTab)
 end
+
+searchBox(bulkRow, function(text)
+	buyQuery = text
+	buildList(activeSubTab)
+end)
 
 --========================================================
 -- PLANT page
@@ -1978,7 +2021,7 @@ do
 			paint()
 		end)
 
-		table.insert(plantRowEntries, { name = name, paint = paint })
+		table.insert(plantRowEntries, { name = name, paint = paint, frame = row })
 	end
 end
 
@@ -1988,16 +2031,28 @@ RemoteRepaint.plant = function()
 	end
 end
 
-plantAllBtn.MouseButton1Click:Connect(function()
+searchBox(plantBulkRow, function(text)
 	for _, entry in ipairs(plantRowEntries) do
-		PlantSelected[entry.name] = true
-		entry.paint()
+		entry.frame.Visible = matchesQuery(entry.name, text)
+	end
+end)
+
+plantAllBtn.MouseButton1Click:Connect(function()
+	-- Visible rows only, so bulk actions under a search mean the
+	-- filtered set rather than the whole list.
+	for _, entry in ipairs(plantRowEntries) do
+		if entry.frame.Visible then
+			PlantSelected[entry.name] = true
+			entry.paint()
+		end
 	end
 end)
 plantNoneBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(plantRowEntries) do
-		PlantSelected[entry.name] = false
-		entry.paint()
+		if entry.frame.Visible then
+			PlantSelected[entry.name] = false
+			entry.paint()
+		end
 	end
 end)
 
@@ -2150,7 +2205,7 @@ do
 			paint()
 		end)
 
-		table.insert(dropsRowEntries, { name = name, paint = paint })
+		table.insert(dropsRowEntries, { name = name, paint = paint, frame = row })
 	end
 end
 
@@ -2160,16 +2215,26 @@ RemoteRepaint.drops = function()
 	end
 end
 
+searchBox(dropsBulkRow, function(text)
+	for _, entry in ipairs(dropsRowEntries) do
+		entry.frame.Visible = matchesQuery(entry.name, text)
+	end
+end)
+
 dropsAllBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(dropsRowEntries) do
-		CollectSelected[entry.name] = true
-		entry.paint()
+		if entry.frame.Visible then
+			CollectSelected[entry.name] = true
+			entry.paint()
+		end
 	end
 end)
 dropsNoneBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(dropsRowEntries) do
-		CollectSelected[entry.name] = false
-		entry.paint()
+		if entry.frame.Visible then
+			CollectSelected[entry.name] = false
+			entry.paint()
+		end
 	end
 end)
 
@@ -2308,7 +2373,7 @@ do
 			paint()
 		end)
 
-		table.insert(entries, { name = name, paint = paint })
+		table.insert(entries, { name = name, paint = paint, frame = row })
 	end
 
 	RemoteRepaint.harvestExcluded = function()
@@ -2317,16 +2382,26 @@ do
 		end
 	end
 
+	searchBox(bulkRow, function(text)
+		for _, entry in ipairs(entries) do
+			entry.frame.Visible = matchesQuery(entry.name, text)
+		end
+	end)
+
 	excludeAllBtn.MouseButton1Click:Connect(function()
 		for _, entry in ipairs(entries) do
-			HarvestExcluded[entry.name] = true
-			entry.paint()
+			if entry.frame.Visible then
+				HarvestExcluded[entry.name] = true
+				entry.paint()
+			end
 		end
 	end)
 	excludeNoneBtn.MouseButton1Click:Connect(function()
 		for _, entry in ipairs(entries) do
-			HarvestExcluded[entry.name] = false
-			entry.paint()
+			if entry.frame.Visible then
+				HarvestExcluded[entry.name] = false
+				entry.paint()
+			end
 		end
 	end)
 end

@@ -1006,9 +1006,12 @@ runScript(toRun)
   }
 
   function hudListHtml(kind, status, subTab) {
-    const items = hudListItems(kind, status, subTab);
+    const query = (controlState.query[kind] || "").toLowerCase();
+    const items = hudListItems(kind, status, subTab).filter(
+      (it) => !query || it.name.toLowerCase().includes(query)
+    );
     const selected = hudSelectedSet(kind, status, subTab);
-    if (!items.length) {
+    if (!hudListItems(kind, status, subTab).length) {
       return `<div class="hud-note">Waiting for the script's item list…</div>`;
     }
     const subTabs =
@@ -1031,6 +1034,8 @@ runScript(toRun)
               .map((c) => `<button class="hud-pill" data-bulk="cat:${c}">All ${c}</button>`)
               .join("")
           : ""}
+        <input class="hud-preset-name" type="search" data-search="${kind}"
+               placeholder="Search…" value="${escapeHtml(controlState.query[kind] || "")}">
       </div>`;
     const rows = items
       .map((it) => {
@@ -1048,7 +1053,12 @@ runScript(toRun)
         </div>`;
       })
       .join("");
-    return heading + subTabs + bulk + `<div class="hud-list">${rows}</div>`;
+    return (
+      heading +
+      subTabs +
+      bulk +
+      `<div class="hud-list">${rows || `<div class="hud-note">Nothing matches that search.</div>`}</div>`
+    );
   }
 
   function hudModesHtml(status) {
@@ -1148,7 +1158,7 @@ runScript(toRun)
 
   // Live state for the control page. Kept out of the DOM so a re-render
   // never loses which session we're talking to or which tab you're on.
-  const controlState = { code: null, config: {}, status: {}, tab: "Buy", subTab: "All", presets: [], timer: null };
+  const controlState = { code: null, config: {}, status: {}, tab: "Buy", subTab: "All", presets: [], query: {}, timer: null };
 
   function renderControlStatus(session) {
     const el = document.getElementById("controlStatus");
@@ -1196,9 +1206,29 @@ runScript(toRun)
     // finger mid-drag would fight the user. Stats are read-only, so
     // they refresh every poll.
     if (rebuild || onStats) {
+      const focused = document.activeElement;
+      const refocus = focused && focused.hasAttribute && focused.hasAttribute("data-search")
+        ? focused.getAttribute("data-search")
+        : null;
+
       panels.innerHTML = hudHtml(controlState.config, controlState.status, controlState.tab);
       const code = document.getElementById("hudCode");
       if (code) code.textContent = "link code: " + (controlState.code || "—");
+
+      // A rebuild replaces the very input being typed into, so put the
+      // caret back or the search box loses focus on every keystroke.
+      if (refocus) {
+        const box = panels.querySelector(`[data-search="${refocus}"]`);
+        if (box) {
+          box.focus();
+          const end = box.value.length;
+          try {
+            box.setSelectionRange(end, end);
+          } catch (_) {
+            /* type=search may reject setSelectionRange in some browsers */
+          }
+        }
+      }
     }
   }
 
@@ -1422,7 +1452,10 @@ runScript(toRun)
       const bulkBtn = e.target.closest("[data-bulk]");
       if (bulkBtn && kind) {
         const action = bulkBtn.getAttribute("data-bulk");
-        const shown = hudListItems(kind, controlState.status, controlState.subTab);
+        const q = (controlState.query[kind] || "").toLowerCase();
+        const shown = hudListItems(kind, controlState.status, controlState.subTab).filter(
+          (it) => !q || it.name.toLowerCase().includes(q)
+        );
         if (kind === "buy") {
           // Each category is its own config key, so bulk actions have to
           // be applied per category rather than as one flat list.
@@ -1480,6 +1513,13 @@ runScript(toRun)
     });
     window.addEventListener("pointerup", () => {
       controlState.dragging = false;
+    });
+
+    panels.addEventListener("input", (e) => {
+      const search = e.target.closest("[data-search]");
+      if (!search) return;
+      controlState.query[search.getAttribute("data-search")] = search.value;
+      paintHud(true);
     });
 
     // Sliders track the number while dragging but only send the settled

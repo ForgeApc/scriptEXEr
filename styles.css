@@ -1258,6 +1258,9 @@ body {
 ::selection { background: rgba(255, 255, 255, 0.85); color: #000; }
 
 /* ---------- Remote control page ---------- */
+/* Deliberately mirrors the in-game HUD: same near-black panel, 16px
+   radius, hairline stroke, green accent and Gotham-ish weights, so the
+   site reads as the same tool rather than a separate settings screen. */
 .control-link-row {
   display: flex;
   gap: 10px;
@@ -1278,31 +1281,120 @@ body {
 .control-status.good { color: #78ffaa; }
 .control-status.bad { color: #ff8c8c; }
 
-.control-row {
+.hud-panel {
+  max-width: 360px;
+  margin: 24px auto 0;
+  background: rgb(14, 14, 16);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 12px 16px 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.hud-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+.hud-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  color: #78ffaa;
+  margin-top: 3px;
+}
+.hud-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 10px;
+  flex-wrap: wrap;
+}
+.hud-tab {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c8c8cd;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hud-tab.active { background: #78ffaa; color: #141416; }
+
+.hud-row,
+.hud-stat {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 28px;
 }
-.control-row:last-child { border-bottom: none; }
-.control-label {
-  flex: 1 1 auto;
-  font-size: 0.9rem;
+.hud-row-label {
+  font-size: 0.8rem;
+  color: #e6e6eb;
 }
-.control-row input[type="range"] {
-  flex: 0 1 200px;
-  accent-color: #78ffaa;
+.hud-stat-value {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: #e6e6eb;
 }
-.control-row input[type="checkbox"] {
-  width: 20px;
+.hud-stat-value.good { color: #78ffaa; }
+.hud-stat-value.bad { color: #ff8c8c; }
+.hud-note {
+  font-size: 0.72rem;
+  margin-bottom: 8px;
+}
+.hud-note.good { color: #78ffaa; }
+.hud-note.bad { color: #ff8c8c; }
+
+/* Pill switch, matching the script's 26x18 toggle with its 14px knob. */
+.hud-toggle {
+  flex: 0 0 auto;
+  width: 34px;
   height: 20px;
-  accent-color: #78ffaa;
+  border: none;
+  border-radius: 999px;
+  background: rgb(60, 60, 64);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: background 0.15s ease;
 }
-.control-value {
-  flex: 0 0 62px;
-  text-align: right;
+.hud-toggle.on { background: #78ffaa; }
+.hud-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(20, 20, 22);
+  transition: left 0.15s ease;
+}
+.hud-toggle.on .hud-knob { left: 17px; }
+
+.hud-slider-row { padding: 6px 0 2px; }
+.hud-slider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.hud-value {
+  width: 58px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
+.hud-range {
+  width: 100%;
+  margin-top: 8px;
+  accent-color: #78ffaa;
 }

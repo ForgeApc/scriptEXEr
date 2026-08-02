@@ -853,61 +853,136 @@ runScript(toRun)
 
   /* ---------- Remote control ---------- */
 
-  // Every switch the site can flip, described once. The form, the
-  // change handler and the payload are all built from this, so adding a
-  // control later means adding one row here and nothing else.
-  const CONTROLS = [
-    { group: "Plant", key: "plantEnabled", label: "Auto plant", type: "toggle" },
-    { group: "Plant", key: "plantInterval", label: "Plant delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-    { group: "Buy", key: "buyInterval", label: "Buy interval", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-    { group: "Harvest", key: "harvestEnabled", label: "Auto harvest", type: "toggle" },
-    { group: "Harvest", key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-    { group: "Sell", key: "sellEnabled", label: "Auto sell", type: "toggle" },
-    { group: "Sell", key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-    { group: "Drops", key: "collectEnabled", label: "Auto collect drops", type: "toggle" },
-    { group: "Drops", key: "collectEverything", label: "Collect everything dropped", type: "toggle" },
-    { group: "Drops", key: "collectReturn", label: "Return to my spot after", type: "toggle" },
-    { group: "Drops", key: "collectDwell", label: "Pickup dwell", type: "slider", min: 0.01, max: 2, step: 0.01, unit: "s" },
+  // The tab layout mirrors the in-game panel exactly — same tabs, same
+  // order, same controls on each — so the site is the script, remotely.
+  const CONTROL_TABS = [
+    {
+      name: "Buy",
+      controls: [
+        { key: "buyInterval", label: "Buy interval", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+      ],
+    },
+    {
+      name: "Plant",
+      controls: [
+        { key: "plantEnabled", label: "Enable Auto Plant", type: "toggle" },
+        { key: "plantInterval", label: "Plant delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+      ],
+    },
+    {
+      name: "Drops",
+      controls: [
+        { key: "collectEnabled", label: "Enable Auto Collect", type: "toggle" },
+        { key: "collectReturn", label: "Return to my spot after", type: "toggle" },
+        { key: "collectEverything", label: "Collect everything dropped", type: "toggle" },
+        { key: "collectDwell", label: "Pickup dwell", type: "slider", min: 0.01, max: 2, step: 0.01, unit: "s" },
+      ],
+    },
+    {
+      name: "Harvest",
+      controls: [
+        { key: "harvestEnabled", label: "Enable Auto Harvest", type: "toggle" },
+        { key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+      ],
+    },
+    {
+      name: "Sell",
+      controls: [
+        { key: "sellEnabled", label: "Enable Auto Sell", type: "toggle" },
+        { key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+      ],
+    },
+    { name: "Stats", stats: true },
   ];
 
-  function controlFieldHtml(control, config) {
+  // Same formatting rules as the script's Stats tab, so a number never
+  // reads one way in game and another way here.
+  function hudNumber(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    return Math.round(n).toLocaleString("en-US");
+  }
+  function hudRate(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    return Math.abs(n) < 100 ? n.toFixed(2) : hudNumber(n);
+  }
+  function hudElapsed(seconds) {
+    if (typeof seconds !== "number" || !isFinite(seconds)) return "—";
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m ${s % 60}s` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+  }
+
+  function hudControlHtml(control, config) {
     const value = config[control.key];
     if (control.type === "toggle") {
       return `
-        <label class="control-row">
-          <span class="control-label">${escapeHtml(control.label)}</span>
-          <input type="checkbox" class="control-input" data-control="${control.key}" data-type="toggle" ${value ? "checked" : ""}>
-        </label>`;
+        <div class="hud-row">
+          <span class="hud-row-label">${escapeHtml(control.label)}</span>
+          <button class="hud-toggle${value ? " on" : ""}" data-control="${control.key}" data-type="toggle"
+                  role="switch" aria-checked="${!!value}" aria-label="${escapeHtml(control.label)}">
+            <span class="hud-knob"></span>
+          </button>
+        </div>`;
     }
     const current = typeof value === "number" ? value : control.min;
     return `
-      <div class="control-row">
-        <span class="control-label">${escapeHtml(control.label)}</span>
-        <input type="range" class="control-input" data-control="${control.key}" data-type="slider"
+      <div class="hud-slider-row">
+        <div class="hud-slider-head">
+          <span class="hud-row-label">${escapeHtml(control.label)} (${control.unit}):</span>
+          <input class="hud-value" type="text" data-box="${control.key}" value="${current.toFixed(3)}">
+        </div>
+        <input class="hud-range" type="range" data-control="${control.key}" data-type="slider"
                min="${control.min}" max="${control.max}" step="${control.step}" value="${current}">
-        <output class="control-value" data-output="${control.key}">${current}${control.unit || ""}</output>
       </div>`;
   }
 
-  function controlPanelHtml(config) {
-    const groups = [];
-    CONTROLS.forEach((control) => {
-      let group = groups.find((g) => g.name === control.group);
-      if (!group) {
-        group = { name: control.group, items: [] };
-        groups.push(group);
-      }
-      group.items.push(control);
-    });
-    return groups
-      .map(
-        (group) => `
-        <div class="detail-panel glass">
-          <h2>${escapeHtml(group.name)}</h2>
-          ${group.items.map((c) => controlFieldHtml(c, config)).join("")}
+  function hudStatsHtml(status) {
+    const s = status || {};
+    const rate = typeof s.perSecond === "number" ? s.perSecond : null;
+    const rows = [
+      ["Elapsed time", hudElapsed(s.elapsed), ""],
+      ["Earned so far", hudNumber(s.earned), "good"],
+      ["Spent so far", hudNumber(s.spent), "bad"],
+      ["Net so far", hudNumber(s.net), (s.net || 0) >= 0 ? "good" : "bad"],
+      ["Per second", hudRate(rate), ""],
+      ["Per minute", hudRate(rate === null ? null : rate * 60), ""],
+      ["Per hour", hudRate(rate === null ? null : rate * 3600), ""],
+      ["Per day", hudRate(rate === null ? null : rate * 86400), ""],
+    ];
+    const head = s.statsReady
+      ? `<div class="hud-note good">Tracking · ${escapeHtml(s.statsSource || "?")}</div>`
+      : `<div class="hud-note bad">Exact Sheckles value not found — Stats unavailable</div>`;
+    return (
+      head +
+      rows
+        .map(
+          ([label, value, tone]) => `
+        <div class="hud-stat">
+          <span class="hud-row-label">${label}</span>
+          <span class="hud-stat-value ${tone}">${value}</span>
         </div>`
-      )
-      .join("");
+        )
+        .join("")
+    );
+  }
+
+  function hudHtml(config, status, activeTab) {
+    const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
+    return `
+      <div class="hud-panel">
+        <div class="hud-title">⚡ SCRIPTEXER</div>
+        <div class="hud-code" id="hudCode">—</div>
+        <div class="hud-tabs">
+          ${CONTROL_TABS.map(
+            (t) =>
+              `<button class="hud-tab${t.name === tab.name ? " active" : ""}" data-tab="${t.name}">${t.name}</button>`
+          ).join("")}
+        </div>
+        <div class="hud-body">
+          ${tab.stats ? hudStatsHtml(status) : tab.controls.map((c) => hudControlHtml(c, config)).join("")}
+        </div>
+      </div>`;
   }
 
   function viewControl() {
@@ -917,7 +992,7 @@ runScript(toRun)
         <div class="page-hero">
           <span class="eyebrow">SCRIPTEXER · Tools</span>
           <h1>Remote Control</h1>
-          <p>Your script shows a short link code in its panel. Enter it here to flip its switches from anywhere — no need to touch the game.</p>
+          <p>Your script shows a short link code in its panel. Enter it here to drive the exact same panel from anywhere — same tabs, same switches, live stats.</p>
         </div>
 
         <div class="detail-panel glass">
@@ -925,7 +1000,7 @@ runScript(toRun)
           <div class="control-link-row">
             <input type="text" id="controlCode" class="admin-input" placeholder="Link code (e.g. K7QP2M)"
                    maxlength="6" autocomplete="off" spellcheck="false" value="${escapeHtml(saved)}">
-            <button class="btn-primary" id="controlLinkBtn">Link</button>
+            <button class="admin-btn" id="controlLinkBtn">Link</button>
           </div>
           <p class="control-status" id="controlStatus">Not linked yet.</p>
         </div>
@@ -935,8 +1010,8 @@ runScript(toRun)
   }
 
   // Live state for the control page. Kept out of the DOM so a re-render
-  // of the panels never loses which session we're talking to.
-  const controlState = { code: null, config: {}, timer: null };
+  // never loses which session we're talking to or which tab you're on.
+  const controlState = { code: null, config: {}, status: {}, tab: "Buy", timer: null };
 
   function renderControlStatus(session) {
     const el = document.getElementById("controlStatus");
@@ -950,14 +1025,28 @@ runScript(toRun)
     const age = session.updated_at
       ? Math.round((Date.now() - new Date(session.updated_at).getTime()) / 1000)
       : null;
-    const parts = [`Linked to ${escapeHtml(s.player || "unknown player")}`];
+    const parts = [`Linked to ${s.player || "unknown player"}`];
     if (s.planted !== undefined) parts.push(`${s.planted} planted`);
     if (s.bought !== undefined) parts.push(`${s.bought} bought`);
     // A stale heartbeat is the difference between "your settings will
     // apply" and "you're editing a row nothing is reading."
     if (age !== null) parts.push(age < 10 ? "live" : `last seen ${age}s ago`);
     el.textContent = parts.join(" · ");
-    el.className = "control-status" + (age !== null && age < 10 ? " good" : "");
+    el.className = "control-status" + (age !== null && age < 10 ? " good" : " bad");
+  }
+
+  function paintHud(rebuild) {
+    const panels = document.getElementById("controlPanels");
+    if (!panels) return;
+    const onStats = controlState.tab === "Stats";
+    // Controls are rebuilt only on demand — repainting them under a
+    // finger mid-drag would fight the user. Stats are read-only, so
+    // they refresh every poll.
+    if (rebuild || onStats) {
+      panels.innerHTML = hudHtml(controlState.config, controlState.status, controlState.tab);
+      const code = document.getElementById("hudCode");
+      if (code) code.textContent = "link code: " + (controlState.code || "—");
+    }
   }
 
   async function refreshControl(code, rebuild) {
@@ -972,12 +1061,12 @@ runScript(toRun)
     if (!session) return;
 
     controlState.code = code;
+    controlState.status = session.status || {};
     if (rebuild) {
       controlState.config = session.config || {};
-      const panels = document.getElementById("controlPanels");
-      if (panels) panels.innerHTML = controlPanelHtml(controlState.config);
       localStorage.setItem("scriptexer_control_code", code);
     }
+    paintHud(rebuild);
   }
 
   function bindControlEvents() {
@@ -990,9 +1079,7 @@ runScript(toRun)
       if (!code) return;
       refreshControl(code, true);
       clearInterval(controlState.timer);
-      // Poll for the script's heartbeat, but never rebuild the form —
-      // that would yank a slider out from under your finger.
-      controlState.timer = setInterval(() => refreshControl(code, false), 4000);
+      controlState.timer = setInterval(() => refreshControl(code, false), 2000);
     };
 
     linkBtn.addEventListener("click", link);
@@ -1014,26 +1101,51 @@ runScript(toRun)
       }
     };
 
-    panels.addEventListener("change", (e) => {
-      const input = e.target.closest("[data-control]");
-      if (!input) return;
-      const key = input.getAttribute("data-control");
-      if (input.getAttribute("data-type") === "toggle") {
-        send(key, input.checked);
-      } else {
-        send(key, parseFloat(input.value));
+    panels.addEventListener("click", (e) => {
+      const tabBtn = e.target.closest("[data-tab]");
+      if (tabBtn) {
+        controlState.tab = tabBtn.getAttribute("data-tab");
+        paintHud(true);
+        return;
+      }
+      const toggle = e.target.closest('[data-type="toggle"]');
+      if (toggle) {
+        const key = toggle.getAttribute("data-control");
+        const next = !toggle.classList.contains("on");
+        toggle.classList.toggle("on", next);
+        toggle.setAttribute("aria-checked", String(next));
+        send(key, next);
       }
     });
 
-    // Sliders report while dragging so the number tracks your finger,
-    // but only the settled value is sent, on `change`.
+    // Sliders track the number while dragging but only send the settled
+    // value, so a drag doesn't fire dozens of writes.
     panels.addEventListener("input", (e) => {
       const input = e.target.closest('[data-type="slider"]');
       if (!input) return;
-      const key = input.getAttribute("data-control");
-      const out = panels.querySelector(`[data-output="${key}"]`);
-      const control = CONTROLS.find((c) => c.key === key);
-      if (out) out.textContent = input.value + (control && control.unit ? control.unit : "");
+      const box = panels.querySelector(`[data-box="${input.getAttribute("data-control")}"]`);
+      if (box) box.value = parseFloat(input.value).toFixed(3);
+    });
+
+    panels.addEventListener("change", (e) => {
+      const slider = e.target.closest('[data-type="slider"]');
+      if (slider) {
+        send(slider.getAttribute("data-control"), parseFloat(slider.value));
+        return;
+      }
+      // Typed exact values, same as the in-game text box.
+      const box = e.target.closest("[data-box]");
+      if (box) {
+        const key = box.getAttribute("data-box");
+        const control = CONTROL_TABS.flatMap((t) => t.controls || []).find((c) => c.key === key);
+        const parsed = parseFloat(box.value);
+        if (!control || isNaN(parsed)) return;
+        const clamped = Math.min(control.max, Math.max(control.min, parsed));
+        box.value = clamped.toFixed(3);
+        const slider = panels.querySelector(`[data-control="${key}"]`);
+        if (slider) slider.value = clamped;
+        send(key, clamped);
+      }
     });
   }
 

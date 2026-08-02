@@ -2381,6 +2381,10 @@ do
 	end
 
 	local function currentStatus()
+		-- Raw numbers only: the site formats them itself, so the two
+		-- displays can't drift into showing the same figure differently.
+		local elapsed = tick() - StatsStartTime
+		local net = TotalEarned - TotalSpent
 		return {
 			place = tostring(game.PlaceId),
 			player = Players.LocalPlayer.Name,
@@ -2392,6 +2396,13 @@ do
 			harvestEnabled = HarvestEnabled,
 			sellEnabled = SellEnabled,
 			collectEnabled = CollectEnabled,
+			statsReady = StatsStartingSheckles ~= nil,
+			statsSource = tostring(sheckleSource or "?"),
+			elapsed = elapsed,
+			earned = TotalEarned,
+			spent = TotalSpent,
+			net = net,
+			perSecond = elapsed > 0 and (net / elapsed) or 0,
 		}
 	end
 

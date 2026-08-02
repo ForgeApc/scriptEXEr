@@ -807,26 +807,31 @@ local PlantFixedPosition = nil
 -- Cached, because this walks every descendant of the plot and random
 -- planting asks for it on every tick. On a large garden that is tens of
 -- thousands of instances per tick, for a slab that never changes.
-local PlotGroundCache = { part = nil, plot = nil }
+-- The cache lives in a closure rather than a new local: the main chunk
+-- is at Lua's 200-locals ceiling, so this adds none.
+local getPlotGround
+do
+	local PlotGroundCache = { part = nil, plot = nil }
 
-local function getPlotGround()
-	if not OwnerPlot then return nil end
-	if PlotGroundCache.part and PlotGroundCache.part.Parent and PlotGroundCache.plot == OwnerPlot then
-		return PlotGroundCache.part
-	end
+	function getPlotGround()
+		if not OwnerPlot then return nil end
+		if PlotGroundCache.part and PlotGroundCache.part.Parent and PlotGroundCache.plot == OwnerPlot then
+			return PlotGroundCache.part
+		end
 
-	local best, bestArea = nil, 0
-	for _, part in ipairs(OwnerPlot:GetDescendants()) do
-		if part:IsA("BasePart") then
-			local area = part.Size.X * part.Size.Z
-			if area > bestArea then
-				best, bestArea = part, area
+		local best, bestArea = nil, 0
+		for _, part in ipairs(OwnerPlot:GetDescendants()) do
+			if part:IsA("BasePart") then
+				local area = part.Size.X * part.Size.Z
+				if area > bestArea then
+					best, bestArea = part, area
+				end
 			end
 		end
-	end
 
-	PlotGroundCache.part, PlotGroundCache.plot = best, OwnerPlot
-	return best
+		PlotGroundCache.part, PlotGroundCache.plot = best, OwnerPlot
+		return best
+	end
 end
 
 local function randomPlotPosition()

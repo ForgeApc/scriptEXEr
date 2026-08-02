@@ -1323,6 +1323,50 @@ function Drop.isDropped(prompt)
 	return false
 end
 
+-- NPCs are triggered the same way loot is: a prompt. Walking up to a
+-- shopkeeper and firing it opens menus, sells your crops, or starts
+-- quests — none of which you asked for.
+function Drop.isNpc(prompt)
+	local text = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "")):lower()
+	if
+		text:find("talk")
+		or text:find("shop")
+		or text:find("sell")
+		or text:find("trade")
+		or text:find("quest")
+		or text:find("open")
+	then
+		return true
+	end
+
+	local node = prompt.Parent
+	local depth = 0
+	while node and node ~= Workspace and depth < 5 do
+		-- A Humanoid is the giveaway: loot doesn't have one.
+		if node:IsA("Model") and node:FindFirstChildOfClass("Humanoid") then
+			return true
+		end
+		local name = node.Name:lower()
+		if name:find("npc") or name:find("vendor") or name:find("merchant") or name:find("shop") then
+			return true
+		end
+		node = node.Parent
+		depth += 1
+	end
+	return false
+end
+
+-- One gate for every rule, so the live watcher and the sweep of things
+-- already lying around can never disagree about what counts as loot.
+function Drop.isCollectable(prompt)
+	if Drop.isGarden(prompt) then return false end
+	if Drop.isNpc(prompt) then return false end
+	-- A drop marker outranks the price test: a pet a player dropped is
+	-- loot even if its prompt still mentions a price.
+	if not Drop.isDropped(prompt) and Drop.isPurchase(prompt) then return false end
+	return true
+end
+
 -- What to call a prompt's item, for filtering and for the status line.
 local function promptName(prompt)
 	if prompt.ObjectText and prompt.ObjectText ~= "" then
@@ -1390,24 +1434,57 @@ Workspace.DescendantAdded:Connect(function(inst)
 	-- stream in, and the class check rejects almost everything.
 	if not CollectEnabled then return end
 	if not inst:IsA("ProximityPrompt") then return end
-	if Drop.isGarden(inst) then return end
-	-- A drop marker beats every other test; otherwise anything for sale
-	-- is left alone.
-	if not Drop.isDropped(inst) and Drop.isPurchase(inst) then return end
+	if not Drop.isCollectable(inst) then return end
 	if not matchesCollectFilter(promptName(inst)) then return end
 	table.insert(CollectPending, inst)
 end)
 
+-- Everything already lying on the ground when you switch Auto Collect
+-- on. Without this the collector only ever sees drops that appear
+-- afterwards, so anything dropped before you enabled it sits there
+-- forever.
+--
+-- Walked in slices: Workspace on a big farm is tens of thousands of
+-- instances, and doing it in one go would stall the frame.
+function Drop.sweep()
+	local found = 0
+	local scanned = 0
+	for _, inst in ipairs(Workspace:GetDescendants()) do
+		if not CollectEnabled then return found end
+		if inst:IsA("ProximityPrompt") then
+			local ok, collectable = pcall(Drop.isCollectable, inst)
+			if ok and collectable then
+				local okName, name = pcall(promptName, inst)
+				if okName and matchesCollectFilter(name) then
+					table.insert(CollectPending, inst)
+					found += 1
+				end
+			end
+		end
+		scanned += 1
+		if scanned % 2000 == 0 then task.wait() end
+	end
+	return found
+end
+
 task.spawn(function()
+	local wasEnabled = false
 	while task.wait(0.05) do
+		-- Rising edge only: sweeping on every tick would re-queue the
+		-- whole map continuously.
+		if CollectEnabled and not wasEnabled then
+			wasEnabled = true
+			task.spawn(Drop.sweep)
+		elseif not CollectEnabled then
+			wasEnabled = false
+		end
+
 		if CollectEnabled and #CollectPending > 0 then
 			local target = table.remove(CollectPending, 1)
 			-- Re-checked here as well: a prompt can be queued before its
 			-- plant finishes parenting into the plot.
-			if target and target.Parent then
-				if Drop.isGarden(target) or (not Drop.isDropped(target) and Drop.isPurchase(target)) then
-					target = nil
-				end
+			if target and target.Parent and not Drop.isCollectable(target) then
+				target = nil
 			end
 			local name = "?"
 			pcall(function() name = promptName(target) end)

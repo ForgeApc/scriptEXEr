@@ -874,6 +874,15 @@ runScript(toRun)
       list: "plant",
     },
     {
+      name: "Shovel",
+      controls: [
+        { key: "shovelEnabled", label: "Enable Auto Shovel", type: "toggle" },
+        { key: "shovelInterval", label: "Shovel delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+      ],
+      shovel: true,
+      list: "shovel",
+    },
+    {
       name: "Drops",
       controls: [
         { key: "collectEnabled", label: "Enable Auto Collect", type: "toggle" },
@@ -995,6 +1004,11 @@ runScript(toRun)
       });
       return out;
     }
+    // Shovel lists what's growing on the plot, not the shop: you can
+    // only dig up what you planted.
+    if (kind === "shovel") {
+      return ((status && status.gardenPlants) || []).map((name) => ({ name, category: "Garden" }));
+    }
     // Plant, Drops and Harvest all list seeds.
     return (items.Seeds || []).map((it) => ({ name: it.name, category: "Seeds" }));
   }
@@ -1004,6 +1018,7 @@ runScript(toRun)
     if (kind === "plant") return new Set(sel.plant || []);
     if (kind === "drops") return new Set(sel.drops || []);
     if (kind === "harvest") return new Set(sel.harvestExcluded || []);
+    if (kind === "shovel") return new Set(sel.shovel || []);
     const cats = subTab === "All" ? ["Seeds", "Gears", "Crates"] : [subTab];
     const set = new Set();
     cats.forEach((cat) => (sel[cat] || []).forEach((n) => set.add(cat + "\u0000" + n)));
@@ -1017,7 +1032,11 @@ runScript(toRun)
     );
     const selected = hudSelectedSet(kind, status, subTab);
     if (!hudListItems(kind, status, subTab).length) {
-      return `<div class="hud-note">Waiting for the script's item list…</div>`;
+      return `<div class="hud-note">${
+        kind === "shovel"
+          ? "Nothing growing on your plot yet."
+          : "Waiting for the script's item list…"
+      }</div>`;
     }
     const subTabs =
       kind === "buy"
@@ -1029,7 +1048,11 @@ runScript(toRun)
             .join("")}</div>`
         : "";
     const heading =
-      kind === "harvest" ? `<div class="hud-note">Don't harvest these:</div>` : "";
+      kind === "harvest"
+        ? `<div class="hud-note">Don't harvest these:</div>`
+        : kind === "shovel"
+        ? `<div class="hud-note">Dig up these crops:</div>`
+        : "";
     const bulk = `
       <div class="hud-bulk">
         <button class="hud-pill" data-bulk="all">${kind === "harvest" ? "Exclude All" : "Select All"}</button>
@@ -1052,7 +1075,7 @@ runScript(toRun)
           ${it.inStock === undefined
             ? ""
             : `<span class="hud-stock ${it.inStock ? "in" : "out"}">${it.inStock ? "In stock" : "Out of stock"}</span>`}
-          <button class="hud-toggle${on ? (kind === "harvest" ? " on exclude" : " on") : ""}" data-item="${escapeHtml(it.name)}"
+          <button class="hud-toggle${on ? (kind === "harvest" || kind === "shovel" ? " on exclude" : " on") : ""}" data-item="${escapeHtml(it.name)}"
                   data-category="${it.category}" role="switch" aria-checked="${on}"
                   aria-label="${escapeHtml(it.name)}"><span class="hud-knob"></span></button>
         </div>`;
@@ -1113,6 +1136,12 @@ runScript(toRun)
       <div class="hud-list">${rows || `<div class="hud-note">No presets saved yet.</div>`}</div>`;
   }
 
+  function hudShovelHtml(status) {
+    const s = status || {};
+    const found = typeof s.shovelStatus === "string" && s.shovelStatus.startsWith("using ");
+    return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
+  }
+
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -1132,6 +1161,7 @@ runScript(toRun)
             ? hudPresetsHtml(status)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
               (tab.modes ? hudModesHtml(status) : "") +
+              (tab.shovel ? hudShovelHtml(status) : "") +
               (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;
@@ -1195,7 +1225,7 @@ runScript(toRun)
     const sel = st.selected || {};
     // Settings are in here too: a switch flipped inside the game has to
     // show up on the site the same way a remote change does.
-    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, sel.harvestExcluded, st.plantMode, st.settings]);
+    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, sel.harvestExcluded, sel.shovel, st.gardenPlants, st.plantMode, st.settings]);
   }
 
   function paintHud(rebuild) {
@@ -1273,6 +1303,7 @@ runScript(toRun)
       plantSeeds: sel.plant,
       collectItems: sel.drops,
       harvestExcluded: sel.harvestExcluded,
+      shovelPlants: sel.shovel,
     };
     Object.keys(confirmed).forEach((key) => {
       const pending = controlState.config[key];
@@ -1328,6 +1359,7 @@ runScript(toRun)
           plantSeeds: sel.plant || [],
           collectItems: sel.drops || [],
           harvestExcluded: sel.harvestExcluded || [],
+          shovelPlants: sel.shovel || [],
         });
         await Presets.save(owner, name, config);
         if (input) input.value = "";
@@ -1394,6 +1426,8 @@ runScript(toRun)
         ? "plantSeeds"
         : kind === "harvest"
         ? "harvestExcluded"
+        : kind === "shovel"
+        ? "shovelPlants"
         : "collectItems";
 
     const currentSelection = (kind, category) => {
@@ -1407,6 +1441,8 @@ runScript(toRun)
           ? sel.plant
           : kind === "harvest"
           ? sel.harvestExcluded
+          : kind === "shovel"
+          ? sel.shovel
           : sel.drops;
       return (fromStatus || []).slice();
     };

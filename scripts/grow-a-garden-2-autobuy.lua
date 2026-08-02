@@ -958,6 +958,194 @@ task.spawn(function()
 end)
 
 --========================================================
+-- SHOVEL — digs up plants you pick from your own garden.
+--
+-- The removal remote isn't named in anything dumped from this game, so
+-- rather than guess one name and fail silently — the trap that cost
+-- several rounds on planting — the module is searched for remotes whose
+-- path reads like a removal, and the first one the game confirms (by a
+-- plant actually disappearing) is the one kept.
+--
+-- Everything lives on one table: the main chunk is at Lua's 200-locals
+-- ceiling.
+--========================================================
+local Shovel = {
+	enabled = false,
+	interval = 0.5,
+	selected = {}, -- plant name -> true
+	removed = 0,
+	remote = nil,
+	status = "idle",
+	names = {}, -- what's actually growing, for the picker
+}
+
+do
+	local function identity(plant)
+		local names = { plant.Name }
+		local ok, attrs = pcall(function() return plant:GetAttributes() end)
+		if ok and attrs then
+			for key, value in pairs(attrs) do
+				if type(value) == "string" and value ~= "" then
+					local k = tostring(key):lower()
+					if k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop") then
+						table.insert(names, value)
+					end
+				end
+			end
+		end
+		return names
+	end
+
+	local function isSelectedPlant(plant)
+		for wanted, on in pairs(Shovel.selected) do
+			if on then
+				local target = wanted:lower()
+				for _, candidate in ipairs(identity(plant)) do
+					local name = tostring(candidate):lower()
+					if name == target or name:find(target, 1, true) then return true end
+				end
+			end
+		end
+		return false
+	end
+
+	local function findRemotes()
+		local found = {}
+		local function walk(node, prefix, depth)
+			if depth > 3 or type(node) ~= "table" then return end
+			pcall(function()
+				for key, value in pairs(node) do
+					local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
+					local lower = path:lower()
+					if
+						lower:find("shovel")
+						or lower:find("remove")
+						or lower:find("destroy")
+						or lower:find("delete")
+						or lower:find("dig")
+					then
+						if type(value) == "table" and type(value.Fire) == "function" then
+							table.insert(found, { path = path, remote = value })
+						end
+					end
+					if type(value) == "table" then walk(value, path, depth + 1) end
+				end
+			end)
+		end
+		walk(Networking, "", 1)
+		return found
+	end
+
+	-- The server acts on what you're holding, same as seeds.
+	local function equipShovel()
+		local player = Players.LocalPlayer
+		local character = player.Character
+		if not character then return nil end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then return nil end
+
+		local function find(container)
+			if not container then return nil end
+			for _, tool in ipairs(container:GetChildren()) do
+				if tool:IsA("Tool") and tool.Name:lower():find("shovel") then return tool end
+			end
+			return nil
+		end
+
+		local tool = find(character) or find(player:FindFirstChildOfClass("Backpack"))
+		if not tool then return nil end
+		if tool.Parent ~= character then
+			pcall(function() humanoid:EquipTool(tool) end)
+			local deadline = tick() + 0.4
+			while tick() < deadline and tool.Parent ~= character do
+				task.wait(0.03)
+			end
+		end
+		return tool
+	end
+
+	local function digUp(plant)
+		local tool = equipShovel()
+		local id = plant:GetAttribute("PlantId")
+		local attempts = { { id }, { plant }, { id, tool }, { plant, tool }, { id, plant } }
+		local candidates = Shovel.remote and { Shovel.remote } or findRemotes()
+
+		for _, entry in ipairs(candidates) do
+			for _, args in ipairs(attempts) do
+				pcall(function() entry.remote:Fire(table.unpack(args)) end)
+				-- Removal replicates; give it a moment before judging.
+				local deadline = tick() + 0.35
+				while tick() < deadline do
+					if not plant.Parent then
+						Shovel.remote = entry
+						Shovel.status = "using " .. entry.path
+						Shovel.removed += 1
+						return true
+					end
+					task.wait(0.05)
+				end
+				-- Once the remote is known, don't grind through the
+				-- other shapes on every plant.
+				if Shovel.remote then break end
+			end
+		end
+
+		if #candidates == 0 then
+			Shovel.status = "no removal remote found in this world"
+		elseif not Shovel.remote then
+			Shovel.status = #candidates .. " candidate remote(s), none removed a plant yet"
+		end
+		return false
+	end
+
+	-- What's growing right now, for the picker. Refreshed on a slow
+	-- loop rather than per tick: on a large garden this walks every
+	-- plant.
+	task.spawn(function()
+		while true do
+			local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+			if plantsFolder then
+				local seen, names = {}, {}
+				for _, plant in ipairs(plantsFolder:GetChildren()) do
+					local label = identity(plant)[1]
+					if label and not seen[label] then
+						seen[label] = true
+						table.insert(names, label)
+					end
+				end
+				table.sort(names)
+				Shovel.names = names
+			end
+			task.wait(3)
+		end
+	end)
+
+	task.spawn(function()
+		while task.wait(Shovel.interval) do
+			if Shovel.enabled then
+				local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+				if not plantsFolder then
+					Shovel.status = "locating your plot…"
+				else
+					local target = nil
+					for _, plant in ipairs(plantsFolder:GetChildren()) do
+						if isSelectedPlant(plant) then
+							target = plant
+							break
+						end
+					end
+					if target then
+						digUp(target)
+					else
+						Shovel.status = "nothing selected is growing"
+					end
+				end
+			end
+		end
+	end)
+end
+
+--========================================================
 -- DROPS — teleports to dropped items the moment they appear.
 --
 -- The Networking dump has DroppedItem.PickupFx and RequestDrop but no
@@ -1149,14 +1337,14 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 398, Plant = 384, Drops = 380, Harvest = 384, Sell = 90, Stats = 268 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
 frame.Position = UDim2.new(1, -18, 0, 50)
-frame.Size = UDim2.new(0, 344, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
+frame.Size = UDim2.new(0, 420, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
 frame.BorderSizePixel = 0
@@ -1241,8 +1429,7 @@ local RemoteWidgets = {}
 
 -- Readers the remote-control status block calls for values that are
 -- created further down the file than it is.
-local RemoteFps = nil
-local RemoteLowPower = nil
+local RemoteReaders = { fps = nil, lowPower = nil }
 
 -- Repaint hooks for the list-based tabs, which have no single widget to
 -- set: applying a selection remotely has to redraw whole rows.
@@ -1534,7 +1721,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Drops", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -1552,13 +1739,13 @@ local function setActivePage(name)
 	for key, page in pairs(pages) do
 		page.Visible = key == name
 	end
-	frame.Size = UDim2.new(0, 344, 0, TOP_OFFSET + PAGE_HEIGHTS[name] + 8)
+	frame.Size = UDim2.new(0, 420, 0, TOP_OFFSET + PAGE_HEIGHTS[name] + 8)
 	paintTopTabs()
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 5 tabs across a 268px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 48)
+	-- 7 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 51)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -2531,6 +2718,188 @@ do
 end
 
 --========================================================
+-- SHOVEL page
+--
+-- Wrapped in a do-block so its locals don't count against the main
+-- chunk, which is at Lua's 200-locals ceiling.
+--========================================================
+do
+	local shovelPage = pages.Shovel
+
+	RemoteWidgets.shovelEnabled = select(2, createToggleRow(shovelPage, 0, "Enable Auto Shovel", Shovel.enabled, function(state)
+		Shovel.enabled = state
+	end))
+
+	RemoteWidgets.shovelInterval = select(2, createSlider(shovelPage, 32, "Shovel delay", 0.001, 10, Shovel.interval, "s", function(v)
+		Shovel.interval = v
+	end))
+
+	local shovelStatusLabel = Instance.new("TextLabel")
+	shovelStatusLabel.BackgroundTransparency = 1
+	shovelStatusLabel.Position = UDim2.new(0, 16, 0, 76)
+	shovelStatusLabel.Size = UDim2.new(1, -32, 0, 30)
+	shovelStatusLabel.Font = Enum.Font.GothamBold
+	shovelStatusLabel.Text = "Dug up: 0"
+	shovelStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+	shovelStatusLabel.TextSize = 12
+	shovelStatusLabel.TextWrapped = true
+	shovelStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+	shovelStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+	shovelStatusLabel.Parent = shovelPage
+
+	-- The picker lists what's actually growing on your plot, refreshed as
+	-- the garden changes, rather than the shop catalogue — you can only dig
+	-- up what you planted.
+	do
+		local bulkRow = Instance.new("Frame")
+		bulkRow.BackgroundTransparency = 1
+		bulkRow.Position = UDim2.new(0, 16, 0, 112)
+		bulkRow.Size = UDim2.new(1, -32, 0, 24)
+		bulkRow.Parent = shovelPage
+
+		local bulkLayout = Instance.new("UIListLayout")
+		bulkLayout.FillDirection = Enum.FillDirection.Horizontal
+		bulkLayout.Padding = UDim.new(0, 6)
+		bulkLayout.Parent = bulkRow
+
+		local allBtn = pillButton(bulkRow, "Select All", 90)
+		local noneBtn = pillButton(bulkRow, "None", 90)
+
+		local list = Instance.new("ScrollingFrame")
+		list.Position = UDim2.new(0, 16, 0, 142)
+		list.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Shovel - 142 - 8)
+		list.BackgroundTransparency = 1
+		list.CanvasSize = UDim2.new(0, 0, 0, 0)
+		list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		list.ScrollBarThickness = 3
+		list.ScrollBarImageTransparency = 0.4
+		list.BorderSizePixel = 0
+		list.Parent = shovelPage
+
+		local listLayout = Instance.new("UIListLayout")
+		listLayout.Padding = UDim.new(0, 4)
+		listLayout.Parent = list
+
+		local entries = {}
+		local query = ""
+
+		local function rebuild()
+			for _, child in ipairs(list:GetChildren()) do
+				if child:IsA("Frame") then child:Destroy() end
+			end
+			entries = {}
+
+			for _, name in ipairs(Shovel.names) do
+				local row = Instance.new("Frame")
+				row.Size = UDim2.new(1, 0, 0, 28)
+				row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+				row.BackgroundTransparency = 0.93
+				row.Visible = matchesQuery(name, query)
+				row.Parent = list
+
+				local rowCorner = Instance.new("UICorner")
+				rowCorner.CornerRadius = UDim.new(0, 8)
+				rowCorner.Parent = row
+
+				local label = Instance.new("TextLabel")
+				label.BackgroundTransparency = 1
+				label.Position = UDim2.new(0, 10, 0, 0)
+				label.Size = UDim2.new(1, -46, 1, 0)
+				label.Font = Enum.Font.Gotham
+				label.Text = name
+				label.TextColor3 = Color3.fromRGB(230, 230, 235)
+				label.TextSize = 12
+				label.TextXAlignment = Enum.TextXAlignment.Left
+				label.TextTruncate = Enum.TextTruncate.AtEnd
+				label.Parent = row
+
+				local toggle = Instance.new("TextButton")
+				toggle.Position = UDim2.new(1, -34, 0.5, -9)
+				toggle.Size = UDim2.new(0, 26, 0, 18)
+				toggle.AutoButtonColor = false
+				toggle.Text = ""
+				toggle.Parent = row
+
+				local toggleCorner = Instance.new("UICorner")
+				toggleCorner.CornerRadius = UDim.new(1, 0)
+				toggleCorner.Parent = toggle
+
+				local knob = Instance.new("Frame")
+				knob.Size = UDim2.new(0, 14, 0, 14)
+				knob.Position = UDim2.new(0, 2, 0.5, -7)
+				knob.Parent = toggle
+				local knobCorner = Instance.new("UICorner")
+				knobCorner.CornerRadius = UDim.new(1, 0)
+				knobCorner.Parent = knob
+
+				local function paint()
+					local on = Shovel.selected[name] == true
+					-- Red: this switch destroys the crop.
+					toggle.BackgroundColor3 = on and Color3.fromRGB(255, 140, 140) or Color3.fromRGB(60, 60, 64)
+					knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+					knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+				end
+				paint()
+
+				toggle.MouseButton1Click:Connect(function()
+					Shovel.selected[name] = not (Shovel.selected[name] == true)
+					paint()
+				end)
+
+				table.insert(entries, { name = name, paint = paint, frame = row })
+			end
+		end
+
+		searchBox(bulkRow, function(text)
+			query = text
+			for _, entry in ipairs(entries) do
+				entry.frame.Visible = matchesQuery(entry.name, query)
+			end
+		end)
+
+		allBtn.MouseButton1Click:Connect(function()
+			for _, entry in ipairs(entries) do
+				if entry.frame.Visible then
+					Shovel.selected[entry.name] = true
+					entry.paint()
+				end
+			end
+		end)
+		noneBtn.MouseButton1Click:Connect(function()
+			for _, entry in ipairs(entries) do
+				if entry.frame.Visible then
+					Shovel.selected[entry.name] = false
+					entry.paint()
+				end
+			end
+		end)
+
+		RemoteRepaint.shovel = function()
+			for _, entry in ipairs(entries) do
+				entry.paint()
+			end
+		end
+
+		rebuild()
+
+		task.spawn(function()
+			local shown = ""
+			while task.wait(0.5) do
+				-- Rebuild only when the set of crops actually changes, so
+				-- the list doesn't flicker under your finger.
+				local signature = table.concat(Shovel.names, "|")
+				if signature ~= shown then
+					shown = signature
+					rebuild()
+				end
+				shovelStatusLabel.Text = string.format("Dug up: %d · %s", Shovel.removed, Shovel.status)
+				shovelStatusLabel.TextColor3 = Shovel.remote and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
+			end
+		end)
+	end
+end
+
+--========================================================
 -- SELL page
 --========================================================
 local sellPage = pages.Sell
@@ -2817,6 +3186,13 @@ do
 			RemoteRepaint.harvestExcluded()
 		end
 
+		if applySelection(Shovel.selected, config.shovelPlants) and RemoteRepaint.shovel then
+			RemoteRepaint.shovel()
+		end
+
+		Shovel.enabled = switch("shovelEnabled", config.shovelEnabled, Shovel.enabled)
+		Shovel.interval = slider("shovelInterval", config.shovelInterval, Shovel.interval, 0.001, 10)
+
 		if config.plantMode == "me" or config.plantMode == "random" or config.plantMode == "fixed" then
 			if config.plantMode ~= PlantMode and RemoteRepaint.plantMode then
 				RemoteRepaint.plantMode(config.plantMode)
@@ -2863,9 +3239,14 @@ do
 				collectEverything = CollectEverything,
 				collectReturn = CollectReturn,
 				collectDwell = CollectDwell,
-				lowPower = RemoteLowPower and RemoteLowPower() or false,
+				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
+				shovelEnabled = Shovel.enabled,
+				shovelInterval = Shovel.interval,
 			},
-			fps = RemoteFps and RemoteFps() or nil,
+			shoveled = Shovel.removed,
+			shovelStatus = Shovel.status,
+			gardenPlants = Shovel.names,
+			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
 			-- asking you to type item names.
@@ -2877,6 +3258,7 @@ do
 				plant = RemoteSelectedList(PlantSelected),
 				drops = RemoteSelectedList(CollectSelected),
 				harvestExcluded = RemoteSelectedList(HarvestExcluded),
+				shovel = RemoteSelectedList(Shovel.selected),
 			},
 		}
 	end
@@ -3001,7 +3383,7 @@ do
 			task.wait(1)
 			local fps = frames / math.max(tick() - started, 0.001)
 			frames = 0
-			RemoteFps = function() return math.floor(fps + 0.5) end
+			RemoteReaders.fps = function() return math.floor(fps + 0.5) end
 			fpsLabel.Text = string.format("%d fps", math.floor(fps + 0.5))
 			fpsLabel.TextColor3 = fps >= 45 and Color3.fromRGB(120, 255, 170)
 				or fps >= 20 and Color3.fromRGB(255, 220, 130)
@@ -3041,7 +3423,7 @@ do
 		end)
 	end
 
-	RemoteLowPower = function() return LowPower end
+	RemoteReaders.lowPower = function() return LowPower end
 
 	RemoteWidgets.lowPower = select(2, createToggleRow(statsPage, 232, "Low power (stop drawing the world)", LowPower, function(state)
 		LowPower = state

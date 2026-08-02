@@ -2523,20 +2523,37 @@ do
 	--------------------------------------------------------
 	-- The code label, tucked under the title.
 	--------------------------------------------------------
+	-- Sits on the title row, right-aligned. It used to be placed just
+	-- below the title at y=30, which put it underneath the tab bar at
+	-- y=38 — the code was being drawn, just hidden.
 	local codeLabel = Instance.new("TextLabel")
 	codeLabel.BackgroundTransparency = 1
-	codeLabel.Position = UDim2.new(0, 16, 0, 30)
-	codeLabel.Size = UDim2.new(1, -32, 0, 14)
+	codeLabel.AnchorPoint = Vector2.new(1, 0)
+	codeLabel.Position = UDim2.new(1, -16, 0, 12)
+	codeLabel.Size = UDim2.new(0, 150, 0, 18)
 	codeLabel.Font = Enum.Font.Code
-	codeLabel.Text = httpRequest and ("link code: " .. Code) or "link code: unavailable (no HTTP)"
+	codeLabel.Text = httpRequest and ("code: " .. Code) or "no HTTP"
 	codeLabel.TextColor3 = httpRequest and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
-	codeLabel.TextSize = 11
-	codeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	codeLabel.TextSize = 12
+	codeLabel.TextXAlignment = Enum.TextXAlignment.Right
 	codeLabel.Parent = frame
 
 	if httpRequest then
 		-- Register, then poll. Registration is retried by the same loop,
 		-- so a hiccup at startup doesn't leave the code dead forever.
+		-- A preset starred on the site is applied once at startup,
+		-- before the first poll, so a fresh run comes up configured.
+		task.spawn(function()
+			local rows = call(
+				"GET",
+				"presets?owner=eq." .. HttpService:UrlEncode(Players.LocalPlayer.Name) .. "&autoload=is.true&select=config&limit=1",
+				nil
+			)
+			if type(rows) == "table" and rows[1] then
+				applyConfig(rows[1].config)
+			end
+		end)
+
 		local registered = false
 		task.spawn(function()
 			while true do

@@ -488,6 +488,45 @@ const Control = {
   },
 };
 
+/**
+ * Saved presets. A preset is a config blob under a name, owned by the
+ * Roblox player the linked script reports. One per owner may be starred
+ * as autoload, which the script applies at startup.
+ */
+const Presets = {
+  async list(owner) {
+    const { data, error } = await sb
+      .from("presets")
+      .select("id, name, config, autoload, created_at")
+      .eq("owner", owner)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async save(owner, name, config) {
+    const { error } = await sb
+      .from("presets")
+      .upsert({ owner, name, config }, { onConflict: "owner,name" });
+    if (error) throw error;
+  },
+
+  async remove(id) {
+    const { error } = await sb.from("presets").delete().eq("id", id);
+    if (error) throw error;
+  },
+
+  /** Exactly one preset per owner is the autoload one. */
+  async setAutoload(owner, id) {
+    const clear = await sb.from("presets").update({ autoload: false }).eq("owner", owner);
+    if (clear.error) throw clear.error;
+    if (!id) return;
+    const { error } = await sb.from("presets").update({ autoload: true }).eq("id", id);
+    if (error) throw error;
+  },
+};
+
 window.Store = Store;
 window.Control = Control;
+window.Presets = Presets;
 

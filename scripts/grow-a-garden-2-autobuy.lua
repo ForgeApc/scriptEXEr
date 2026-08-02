@@ -3918,3 +3918,22 @@ do
 		end
 	end)
 end
+
+--========================================================
+-- SURVIVING A REJOIN
+--
+-- Only the executor can run something the moment a game starts (its
+-- autoexec folder), but a teleport or server hop is not a fresh start —
+-- it kills every script without touching autoexec. queue_on_teleport
+-- runs this again on the other side, so switching servers, hopping, or
+-- being sent to another world brings the panel straight back with your
+-- saved settings already applied.
+--========================================================
+do
+	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
+	local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
+
+	if type(queue) == "function" then
+		pcall(queue, 'loadstring(game:HttpGet("' .. SELF .. '"))()')
+	end
+end

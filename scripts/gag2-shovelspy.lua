@@ -73,8 +73,12 @@ else
 			for key, value in pairs(node) do
 				local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
 				if type(value) == "table" then
-					if type(rawget(value, "Fire")) == "function" then
-						local original = value.Fire
+					-- value.Fire, not rawget: these remote objects share
+					-- a metatable and expose Fire through __index, so a
+					-- raw lookup finds nothing and hooks nothing.
+					local okFire, fire = pcall(function() return value.Fire end)
+					if okFire and type(fire) == "function" then
+						local original = fire
 						value.Fire = function(self, ...)
 							local args = table.pack(...)
 							captured += 1
@@ -96,6 +100,10 @@ else
 
 	hook(Networking, "", 1)
 	add("Hooked " .. hooked .. " remote(s).", hooked > 0 and "good" or "bad")
+	if hooked == 0 then
+		add("Nothing exposed a Fire function — the module is shaped", "bad")
+		add("differently than expected.", "bad")
+	end
 	add("")
 	add("Now dig up ONE plant by hand with the shovel.", "info")
 	add("Whatever the game fires will appear below.", "info")

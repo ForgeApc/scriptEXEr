@@ -1169,22 +1169,29 @@ do
 
 	task.spawn(function()
 		while task.wait(Shovel.interval) do
-			if Shovel.enabled then
+			if not Shovel.enabled then
+				-- Say so plainly. "idle" left it ambiguous whether the
+				-- feature was off, finding nothing, or broken.
+				Shovel.status = "off — turn on Auto Shovel"
+			else
 				local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
 				if not plantsFolder then
 					Shovel.status = "locating your plot…"
 				else
-					local target = nil
+					local target, matching, total = nil, 0, 0
 					for _, plant in ipairs(plantsFolder:GetChildren()) do
+						total += 1
 						if isSelectedPlant(plant) then
-							target = plant
-							break
+							matching += 1
+							target = target or plant
 						end
 					end
+
 					if target then
+						Shovel.status = string.format("digging · %d of %d match", matching, total)
 						digUp(target)
 					else
-						Shovel.status = "nothing selected is growing"
+						Shovel.status = string.format("none of %d plants match your picks", total)
 					end
 				end
 			end

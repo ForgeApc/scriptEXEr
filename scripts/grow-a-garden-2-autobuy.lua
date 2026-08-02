@@ -423,13 +423,39 @@ end
 -- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
 -- matching is loose in the same way planting's is.
 local HarvestExcluded = {}
+local HarvestSkipped = 0 -- plants left alone by the exclusion list
 
-local function isHarvestExcluded(plantName)
-	local name = plantName:lower()
+-- What a plant "is" isn't reliably its instance name: plots often name
+-- children by id and keep the crop type in an attribute. Matching only
+-- on .Name meant exclusions silently never fired, so every plausible
+-- identifying field is checked.
+local function plantNames(plant)
+	local names = { plant.Name }
+	local ok, attrs = pcall(function() return plant:GetAttributes() end)
+	if ok and attrs then
+		for key, value in pairs(attrs) do
+			if type(value) == "string" and value ~= "" then
+				local k = tostring(key):lower()
+				if k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop") then
+					table.insert(names, value)
+				end
+			end
+		end
+	end
+	return names
+end
+
+local function isHarvestExcluded(plant)
+	-- Accepts an Instance or a plain string, since fruits are checked
+	-- by name too.
+	local names = typeof(plant) == "Instance" and plantNames(plant) or { tostring(plant) }
 	for seedName, on in pairs(HarvestExcluded) do
 		if on then
 			local wanted = seedName:lower()
-			if name == wanted or name:find(wanted, 1, true) then return true end
+			for _, candidate in ipairs(names) do
+				local name = tostring(candidate):lower()
+				if name == wanted or name:find(wanted, 1, true) then return true end
+			end
 		end
 	end
 	return false
@@ -441,11 +467,16 @@ local function getHarvestTargets()
 	if not plantsFolder then return targets end
 
 	for _, plant in pairs(plantsFolder:GetChildren()) do
-		if isHarvestExcluded(plant.Name) then continue end
+		if isHarvestExcluded(plant) then
+			HarvestSkipped += 1
+			continue
+		end
 		local fruitsFolder = plant:FindFirstChild("Fruits")
 		if fruitsFolder then
 			for _, fruit in pairs(fruitsFolder:GetChildren()) do
-				if fruit:IsA("Model") then
+				-- Fruits are checked as well: on some plots the crop
+				-- type shows up on the fruit rather than its parent.
+				if fruit:IsA("Model") and not isHarvestExcluded(fruit) then
 					table.insert(targets, fruit)
 				end
 			end
@@ -2259,6 +2290,20 @@ harvestNote.TextWrapped = true
 harvestNote.TextXAlignment = Enum.TextXAlignment.Left
 harvestNote.TextYAlignment = Enum.TextYAlignment.Top
 harvestNote.Parent = harvestPage
+
+-- Without a console, a silently-ineffective exclusion looks identical
+-- to a working one; this makes the difference visible.
+task.spawn(function()
+	while task.wait(0.5) do
+		if HarvestSkipped > 0 then
+			harvestNote.Text = string.format(
+				"Harvests ripe crops first, then still-growing ones. Skipped %d excluded.",
+				HarvestSkipped
+			)
+			harvestNote.TextColor3 = Color3.fromRGB(120, 255, 170)
+		end
+	end
+end)
 
 RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
 	HarvestInterval = v

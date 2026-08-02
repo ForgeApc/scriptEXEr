@@ -874,6 +874,15 @@ runScript(toRun)
       list: "plant",
     },
     {
+      name: "Pets",
+      controls: [
+        { key: "petsEnabled", label: "Enable Auto Buy Pets", type: "toggle" },
+        { key: "petsFollow", label: "Follow delay", type: "slider", min: 0.01, max: 1, step: 0.01, unit: "s" },
+        { key: "petsDefend", label: "Defend within", type: "slider", min: 0, max: 60, step: 1, unit: " studs" },
+      ],
+      pets: true,
+    },
+    {
       name: "Shovel",
       controls: [
         { key: "shovelEnabled", label: "Enable Auto Shovel", type: "toggle" },
@@ -1142,6 +1151,11 @@ runScript(toRun)
     return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
   }
 
+  function hudPetsHtml(status) {
+    const s = status || {};
+    return `<div class="hud-note ${(s.petsBought || 0) > 0 ? "good" : ""}">Bought: ${s.petsBought || 0} · ${escapeHtml(s.petsStatus || "off")}</div>`;
+  }
+
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -1162,6 +1176,7 @@ runScript(toRun)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
               (tab.modes ? hudModesHtml(status) : "") +
               (tab.shovel ? hudShovelHtml(status) : "") +
+              (tab.pets ? hudPetsHtml(status) : "") +
               (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;

@@ -1546,7 +1546,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506, Pets = 180 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -1917,6 +1917,153 @@ local function createStatRow(parent, y, labelText)
 end
 
 --========================================================
+-- PETS — buy the pets that spawn around the map, escort them home, and
+-- fend off anyone who comes to take one.
+--
+-- These are the prompts the drop collector deliberately avoids, because
+-- triggering one spends Sheckles. Here that's the point.
+--========================================================
+-- Hung off the Shovel table rather than a local of its own: the main
+-- chunk is at Lua's 200-locals ceiling, and pet defence uses the shovel
+-- anyway.
+Shovel.pets = {
+	enabled = false,
+	follow = 0.1, -- seconds between teleports while escorting
+	defend = 18, -- studs; someone closer than this gets hit
+	bought = 0,
+	status = "off",
+}
+
+do
+	local Pets = Shovel.pets
+	local function petPrompts()
+		local out = {}
+		for _, inst in ipairs(Workspace:GetDescendants()) do
+			if inst:IsA("ProximityPrompt") then
+				local ok, buyable = pcall(Drop.isPurchase, inst)
+				-- A purchase prompt that isn't a shopkeeper is a pet for
+				-- sale on the map.
+				if ok and buyable and not Drop.isNpc(inst) and not Drop.isGarden(inst) then
+					table.insert(out, inst)
+				end
+			end
+		end
+		return out
+	end
+
+	local function modelOf(prompt)
+		local node = prompt.Parent
+		local depth = 0
+		while node and node ~= Workspace and depth < 4 do
+			if node:IsA("Model") then return node end
+			node = node.Parent
+			depth += 1
+		end
+		return nil
+	end
+
+	local function positionOf(model)
+		if not model then return nil end
+		local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+		return part and part.Position or nil
+	end
+
+	-- Someone standing next to your pet is there to take it. One tap of
+	-- the shovel, not a hold: this mirrors what the tool does when you
+	-- click it yourself.
+	local function defend(position)
+		local me = Players.LocalPlayer
+		for _, other in ipairs(Players:GetPlayers()) do
+			if other ~= me and other.Character then
+				local root = other.Character:FindFirstChild("HumanoidRootPart")
+				if root and (root.Position - position).Magnitude <= Pets.defend then
+					local character = me.Character
+					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+					local shovel = nil
+					if character then
+						for _, tool in ipairs(character:GetChildren()) do
+							if tool:IsA("Tool") and tool.Name:lower():find("shovel") then shovel = tool end
+						end
+					end
+					if not shovel and humanoid then
+						local backpack = me:FindFirstChildOfClass("Backpack")
+						for _, tool in ipairs(backpack and backpack:GetChildren() or {}) do
+							if tool:IsA("Tool") and tool.Name:lower():find("shovel") then
+								pcall(function() humanoid:EquipTool(tool) end)
+								shovel = tool
+								break
+							end
+						end
+					end
+					if shovel then
+						pcall(function() shovel:Activate() end)
+						Pets.status = "defending from " .. other.Name
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local function escort(model)
+		local deadline = tick() + 60
+		while tick() < deadline and Pets.enabled and model and model.Parent do
+			local position = positionOf(model)
+			if not position then break end
+
+			local root = Drop.getRoot()
+			if root then
+				root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
+			end
+			if not defend(position) then
+				Pets.status = "escorting a pet home"
+			end
+			task.wait(Pets.follow)
+		end
+	end
+
+	task.spawn(function()
+		while task.wait(0.25) do
+			if not Pets.enabled then
+				Pets.status = "off"
+			else
+				local prompts = petPrompts()
+				if #prompts == 0 then
+					Pets.status = "no pets for sale on the map"
+				else
+					local prompt = prompts[1]
+					local model = modelOf(prompt)
+					local position = positionOf(model)
+					if position then
+						local root = Drop.getRoot()
+						local origin = root and root.CFrame
+						if root then
+							root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
+						end
+						task.wait(0.15)
+						Pets.status = "buying"
+						triggerPrompt(prompt)
+						task.wait(0.35)
+
+						-- The prompt disappearing is the sale going
+						-- through; nothing else confirms it.
+						if not prompt.Parent then
+							Pets.bought += 1
+							escort(model)
+							local rootNow = Drop.getRoot()
+							if rootNow and origin then rootNow.CFrame = origin end
+						else
+							Pets.status = "couldn't buy — probably not enough Sheckles"
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+--========================================================
 -- Top-level tabs + page containers
 --========================================================
 local topTabBar = Instance.new("Frame")
@@ -1930,7 +2077,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Pets", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -1953,8 +2100,8 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 7 tabs across a 388px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 51)
+	-- 8 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 44)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -2927,6 +3074,45 @@ do
 end
 
 --========================================================
+-- PETS page
+--========================================================
+do
+	local petsPage = pages.Pets
+
+	RemoteWidgets.petsEnabled = select(2, createToggleRow(petsPage, 0, "Enable Auto Buy Pets", Shovel.pets.enabled, function(state)
+		Shovel.pets.enabled = state
+	end))
+
+	RemoteWidgets.petsFollow = select(2, createSlider(petsPage, 32, "Follow delay", 0.01, 1, Shovel.pets.follow, "s", function(v)
+		Shovel.pets.follow = v
+	end))
+
+	RemoteWidgets.petsDefend = select(2, createSlider(petsPage, 76, "Defend within", 0, 60, Shovel.pets.defend, "studs", function(v)
+		Shovel.pets.defend = v
+	end))
+
+	local note = Instance.new("TextLabel")
+	note.BackgroundTransparency = 1
+	note.Position = UDim2.new(0, 16, 0, 122)
+	note.Size = UDim2.new(1, -32, 0, 48)
+	note.Font = Enum.Font.Gotham
+	note.Text = ""
+	note.TextColor3 = Color3.fromRGB(200, 200, 205)
+	note.TextSize = 11
+	note.TextWrapped = true
+	note.TextXAlignment = Enum.TextXAlignment.Left
+	note.TextYAlignment = Enum.TextYAlignment.Top
+	note.Parent = petsPage
+
+	task.spawn(function()
+		while task.wait(0.3) do
+			note.Text = string.format("Bought: %d · %s", Shovel.pets.bought, Shovel.pets.status)
+			note.TextColor3 = Shovel.pets.bought > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
+		end
+	end)
+end
+
+--========================================================
 -- SHOVEL page
 --
 -- Wrapped in a do-block so its locals don't count against the main
@@ -3399,6 +3585,10 @@ do
 			RemoteRepaint.shovel()
 		end
 
+		Shovel.pets.enabled = switch("petsEnabled", config.petsEnabled, Shovel.pets.enabled)
+		Shovel.pets.follow = slider("petsFollow", config.petsFollow, Shovel.pets.follow, 0.01, 1)
+		Shovel.pets.defend = slider("petsDefend", config.petsDefend, Shovel.pets.defend, 0, 60)
+
 		Shovel.enabled = switch("shovelEnabled", config.shovelEnabled, Shovel.enabled)
 		Shovel.interval = slider("shovelInterval", config.shovelInterval, Shovel.interval, 0.001, 10)
 
@@ -3451,8 +3641,13 @@ do
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
+				petsEnabled = Shovel.pets.enabled,
+				petsFollow = Shovel.pets.follow,
+				petsDefend = Shovel.pets.defend,
 			},
 			shoveled = Shovel.removed,
+			petsBought = Shovel.pets.bought,
+			petsStatus = Shovel.pets.status,
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
@@ -3785,6 +3980,9 @@ do
 			collectDwell = CollectDwell,
 			shovelEnabled = Shovel.enabled,
 			shovelInterval = Shovel.interval,
+			petsEnabled = Shovel.pets.enabled,
+			petsFollow = Shovel.pets.follow,
+			petsDefend = Shovel.pets.defend,
 			buySeeds = listOf(Selected.Seeds),
 			buyGears = listOf(Selected.Gears),
 			buyCrates = listOf(Selected.Crates),

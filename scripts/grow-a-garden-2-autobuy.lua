@@ -3639,3 +3639,87 @@ do
 		applyLowPower(state)
 	end))
 end
+
+--========================================================
+-- HIDE BUTTON — a small draggable pill that shows/hides the panel.
+--========================================================
+do
+	local UIS = game:GetService("UserInputService")
+
+	local toggleGui = Instance.new("ScreenGui")
+	toggleGui.Name = "ScriptexerToggle"
+	toggleGui.ResetOnSpawn = false
+	toggleGui.IgnoreGuiInset = true
+	toggleGui.Parent = gui.Parent
+
+	local button = Instance.new("TextButton")
+	button.AnchorPoint = Vector2.new(0.5, 0)
+	button.Position = UDim2.new(0.5, 0, 0, 12)
+	button.Size = UDim2.new(0, 56, 0, 28)
+	button.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
+	button.BackgroundTransparency = 0.04
+	button.AutoButtonColor = false
+	button.Font = Enum.Font.GothamBold
+	button.Text = "⚡ hide"
+	button.TextColor3 = Color3.fromRGB(230, 230, 235)
+	button.TextSize = 11
+	button.BorderSizePixel = 0
+	button.Active = true
+	button.Parent = toggleGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = button
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Transparency = 0.88
+	stroke.Parent = button
+
+	-- Dragging and clicking share the same press, so a click is defined
+	-- as a press that barely moved. Without this, letting go after
+	-- dragging would also toggle the panel.
+	local dragging, dragStart, startPos, moved = false, nil, nil, 0
+
+	local function press(input)
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		dragging = true
+		moved = 0
+		dragStart = input.Position
+		startPos = button.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState ~= Enum.UserInputState.End then return end
+			dragging = false
+			if moved <= 6 then
+				frame.Visible = not frame.Visible
+				button.Text = frame.Visible and "⚡ hide" or "⚡ show"
+			end
+		end)
+	end
+
+	button.InputBegan:Connect(press)
+
+	UIS.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if
+			input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch
+		then
+			return
+		end
+		local delta = input.Position - dragStart
+		moved = math.max(moved, math.abs(delta.X) + math.abs(delta.Y))
+		button.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end)
+end

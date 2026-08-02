@@ -3707,12 +3707,19 @@ do
 			dragging = false
 			if moved <= 6 then
 				frame.Visible = not frame.Visible
-				button.Text = frame.Visible and "⚡ hide" or "⚡ show"
 			end
 		end)
 	end
 
 	button.InputBegan:Connect(press)
+
+	-- The keybind can toggle the panel too, so the label follows the
+	-- panel's actual state rather than only what this button did.
+	task.spawn(function()
+		while task.wait(0.3) do
+			button.Text = frame.Visible and "⚡ hide" or "⚡ show"
+		end
+	end)
 
 	UIS.InputChanged:Connect(function(input)
 		if not dragging then return end
@@ -3730,5 +3737,184 @@ do
 			startPos.Y.Scale,
 			startPos.Y.Offset + delta.Y
 		)
+	end)
+end
+
+--========================================================
+-- SETTINGS PERSISTENCE
+--
+-- Everything you tick is otherwise lost the moment you rejoin, and this
+-- script rejoins often (script switching, server hops, crashes). Saved
+-- to the executor's filesystem, so it needs no site and no link code.
+--========================================================
+do
+	local HttpService = game:GetService("HttpService")
+	local FILE = "scriptexer_gag2_settings.json"
+
+	local function listOf(set)
+		local out = {}
+		for name, on in pairs(set or {}) do
+			if on then table.insert(out, name) end
+		end
+		table.sort(out)
+		return out
+	end
+
+	local function fill(set, names)
+		if type(names) ~= "table" then return false end
+		for key in pairs(set) do set[key] = nil end
+		for _, name in ipairs(names) do
+			if type(name) == "string" then set[name] = true end
+		end
+		return true
+	end
+
+	local function snapshot()
+		return {
+			buyInterval = BuyInterval,
+			plantEnabled = PlantEnabled,
+			plantInterval = PlantInterval,
+			plantMode = PlantMode,
+			harvestEnabled = HarvestEnabled,
+			harvestInterval = HarvestInterval,
+			sellEnabled = SellEnabled,
+			sellInterval = SellInterval,
+			collectEnabled = CollectEnabled,
+			collectEverything = CollectEverything,
+			collectReturn = CollectReturn,
+			collectDwell = CollectDwell,
+			shovelEnabled = Shovel.enabled,
+			shovelInterval = Shovel.interval,
+			buySeeds = listOf(Selected.Seeds),
+			buyGears = listOf(Selected.Gears),
+			buyCrates = listOf(Selected.Crates),
+			plantSeeds = listOf(PlantSelected),
+			collectItems = listOf(CollectSelected),
+			harvestExcluded = listOf(HarvestExcluded),
+			shovelPlants = listOf(Shovel.selected),
+		}
+	end
+
+	local function apply(saved)
+		if type(saved) ~= "table" then return end
+
+		-- Driven through the widgets so the switches move too, exactly
+		-- like a remote change.
+		for key, setter in pairs(RemoteWidgets) do
+			local value = saved[key]
+			if type(value) == "boolean" or type(value) == "number" then
+				pcall(setter, value)
+			end
+		end
+
+		fill(Selected.Seeds, saved.buySeeds)
+		fill(Selected.Gears, saved.buyGears)
+		fill(Selected.Crates, saved.buyCrates)
+		if RemoteRepaint.buy then pcall(RemoteRepaint.buy) end
+
+		if fill(PlantSelected, saved.plantSeeds) and RemoteRepaint.plant then
+			pcall(RemoteRepaint.plant)
+		end
+		if fill(CollectSelected, saved.collectItems) and RemoteRepaint.drops then
+			pcall(RemoteRepaint.drops)
+		end
+		if fill(HarvestExcluded, saved.harvestExcluded) and RemoteRepaint.harvestExcluded then
+			pcall(RemoteRepaint.harvestExcluded)
+		end
+		if fill(Shovel.selected, saved.shovelPlants) and RemoteRepaint.shovel then
+			pcall(RemoteRepaint.shovel)
+		end
+
+		if saved.plantMode and RemoteRepaint.plantMode then
+			pcall(RemoteRepaint.plantMode, saved.plantMode)
+		end
+	end
+
+	-- Executors vary; every one of these may be missing.
+	local canRead = type(readfile) == "function" and type(isfile) == "function"
+	local canWrite = type(writefile) == "function"
+
+	if canRead then
+		pcall(function()
+			if isfile(FILE) then
+				apply(HttpService:JSONDecode(readfile(FILE)))
+			end
+		end)
+	end
+
+	if canWrite then
+		-- Polled rather than hooked to every widget: one comparison a
+		-- second is cheaper than threading a save through dozens of
+		-- callbacks, and it catches remote changes for free.
+		task.spawn(function()
+			local last = nil
+			while task.wait(1) do
+				local ok, encoded = pcall(function()
+					return HttpService:JSONEncode(snapshot())
+				end)
+				if ok and encoded ~= last then
+					last = encoded
+					pcall(writefile, FILE, encoded)
+				end
+			end
+		end)
+	end
+end
+
+--========================================================
+-- ERRORS — surfaced in the panel, because there is no console.
+--
+-- Every silent failure this script has had looked identical to a
+-- feature that simply did nothing. LogService reports errors from every
+-- thread, including ones inside task.spawn that would otherwise vanish.
+--========================================================
+do
+	local banner = Instance.new("TextButton")
+	banner.AnchorPoint = Vector2.new(1, 1)
+	banner.Position = UDim2.new(1, -18, 1, -18)
+	banner.Size = UDim2.new(0, 300, 0, 46)
+	banner.BackgroundColor3 = Color3.fromRGB(40, 14, 16)
+	banner.BackgroundTransparency = 0.06
+	banner.BorderSizePixel = 0
+	banner.Visible = false
+	banner.Font = Enum.Font.Code
+	banner.Text = ""
+	banner.TextColor3 = Color3.fromRGB(255, 160, 160)
+	banner.TextSize = 11
+	banner.TextWrapped = true
+	banner.TextXAlignment = Enum.TextXAlignment.Left
+	banner.Parent = gui
+
+	local bannerCorner = Instance.new("UICorner")
+	bannerCorner.CornerRadius = UDim.new(0, 10)
+	bannerCorner.Parent = banner
+
+	banner.MouseButton1Click:Connect(function()
+		banner.Visible = false
+	end)
+
+	pcall(function()
+		game:GetService("LogService").MessageOut:Connect(function(message, messageType)
+			if messageType ~= Enum.MessageType.MessageError then return end
+			-- Only ours: the game logs plenty of its own errors and they
+			-- are not actionable here.
+			if not tostring(message):lower():find("scriptexer") and not tostring(message):find("grow%-a%-garden") then
+				return
+			end
+			banner.Text = "⚠ " .. tostring(message):sub(1, 220) .. "  (tap to dismiss)"
+			banner.Visible = true
+		end)
+	end)
+end
+
+--========================================================
+-- KEYBIND — RightShift hides/shows the panel.
+--========================================================
+do
+	game:GetService("UserInputService").InputBegan:Connect(function(input, processed)
+		if processed then return end
+		if input.KeyCode == Enum.KeyCode.RightShift then
+			frame.Visible = not frame.Visible
+		end
 	end)
 end

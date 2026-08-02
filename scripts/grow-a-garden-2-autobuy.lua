@@ -980,6 +980,8 @@ local Shovel = {
 }
 
 do
+	-- Anything that could name this plant. Plot children are usually
+	-- named by id, so the crop name generally comes from an attribute.
 	local function identity(plant)
 		local names = { plant.Name }
 		local ok, attrs = pcall(function() return plant:GetAttributes() end)
@@ -996,11 +998,44 @@ do
 		return names
 	end
 
+	-- "d41f8a02-1c9e-..." is an id, not a crop. Ids have no spaces, mix
+	-- letters and digits, and run long; real names ("Maple Corn") don't.
+	local function looksLikeId(text)
+		if text:find("%-") and text:len() >= 16 then return true end
+		if text:find(" ") then return false end
+		return text:len() >= 12 and text:find("%d") ~= nil and text:find("%a") ~= nil
+	end
+
+	-- The label shown in the picker: the first candidate that reads like
+	-- a name, falling back to a child's name (plots often hold a model
+	-- named after the crop) and only then to the raw id.
+	local function labelFor(plant)
+		local candidates = identity(plant)
+		-- Attributes first: index 1 is the instance name, which is the
+		-- id in exactly the case this exists to fix.
+		for i = 2, #candidates do
+			if not looksLikeId(candidates[i]) then return candidates[i] end
+		end
+		if not looksLikeId(plant.Name) then return plant.Name end
+
+		local ok, children = pcall(function() return plant:GetChildren() end)
+		if ok then
+			for _, child in ipairs(children) do
+				if not looksLikeId(child.Name) and child.Name ~= "Fruits" and child.Name ~= "Visual" then
+					return child.Name
+				end
+			end
+		end
+		return plant.Name
+	end
+
 	local function isSelectedPlant(plant)
 		for wanted, on in pairs(Shovel.selected) do
 			if on then
 				local target = wanted:lower()
-				for _, candidate in ipairs(identity(plant)) do
+				local candidates = identity(plant)
+				table.insert(candidates, labelFor(plant))
+				for _, candidate in ipairs(candidates) do
 					local name = tostring(candidate):lower()
 					if name == target or name:find(target, 1, true) then return true end
 				end
@@ -1107,7 +1142,7 @@ do
 			if plantsFolder then
 				local seen, names = {}, {}
 				for _, plant in ipairs(plantsFolder:GetChildren()) do
-					local label = identity(plant)[1]
+					local label = labelFor(plant)
 					if label and not seen[label] then
 						seen[label] = true
 						table.insert(names, label)

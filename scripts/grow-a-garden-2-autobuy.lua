@@ -1550,7 +1550,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506, Pets = 180 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506, Pets = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -1937,6 +1937,9 @@ Shovel.pets = {
 	bought = 0,
 	status = "off",
 	busy = false, -- buying or escorting; blocks starting another
+	selected = {}, -- pet name -> true; nothing ticked means "any"
+	names = {}, -- what's on the map right now, for the picker
+	strict = false, -- true when real pet markers were found
 }
 
 do
@@ -1972,19 +1975,74 @@ do
 		return false
 	end
 
+	-- NPCs are Humanoid models too, which is exactly why it kept walking
+	-- to them. Names, dialogue and shop prompts are what separate a
+	-- shopkeeper from a pet.
+	local NPC_WORDS = { "npc", "vendor", "merchant", "shop", "seller", "trader", "guide", "keeper", "clerk" }
+
 	local function looksLikeVendor(model)
 		local name = model.Name:lower()
-		return name:find("npc") or name:find("vendor") or name:find("merchant") or name:find("shop")
+		for _, word in ipairs(NPC_WORDS) do
+			if name:find(word) then return true end
+		end
+		for _, child in ipairs(model:GetDescendants()) do
+			if child:IsA("Dialog") then return true end
+			if child:IsA("ProximityPrompt") then
+				local text = ((child.ActionText or "") .. " " .. (child.ObjectText or "")):lower()
+				if text:find("shop") or text:find("sell") or text:find("talk") or text:find("open") then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	-- A real pet marker: an attribute whose name mentions a pet, or a
+	-- container that does.
+	local function petMarker(model)
+		local ok, attrs = pcall(function() return model:GetAttributes() end)
+		if ok and attrs then
+			for key in pairs(attrs) do
+				if tostring(key):lower():find("pet") then return true end
+			end
+		end
+		local node = model.Parent
+		local depth = 0
+		while node and node ~= Workspace and depth < 4 do
+			if node.Name:lower():find("pet") then return true end
+			node = node.Parent
+			depth += 1
+		end
+		return false
+	end
+
+	local function chosen(name)
+		local anyTicked = false
+		for _, on in pairs(Pets.selected) do
+			if on then anyTicked = true break end
+		end
+		if not anyTicked then return true end
+
+		local lower = name:lower()
+		for wanted, on in pairs(Pets.selected) do
+			if on and (wanted:lower() == lower or lower:find(wanted:lower(), 1, true)) then
+				return true
+			end
+		end
+		return false
 	end
 
 	local owned = {}
 
+	-- Two passes. Gathering candidates first lets "are any of them
+	-- actually marked as pets?" decide the rule, rather than a fixed
+	-- guess that was wrong in both directions: too strict found nothing,
+	-- too loose walked into NPCs.
 	local function petModels()
-		local out = {}
+		local candidates = {}
 		for _, inst in ipairs(Workspace:GetDescendants()) do
 			if
 				inst:IsA("Model")
-				and not owned[inst]
 				and inst:FindFirstChildOfClass("Humanoid")
 				and not isPlayerCharacter(inst)
 				and not looksLikeVendor(inst)
@@ -1992,8 +2050,32 @@ do
 				local ok, garden = pcall(function()
 					return inst:GetAttribute("PlantId") ~= nil or inst:GetAttribute("Owner") ~= nil
 				end)
-				if ok and not garden then table.insert(out, inst) end
+				if ok and not garden then table.insert(candidates, inst) end
 			end
+		end
+
+		local marked = {}
+		for _, model in ipairs(candidates) do
+			if petMarker(model) then table.insert(marked, model) end
+		end
+		local pool = #marked > 0 and marked or candidates
+		Pets.strict = #marked > 0
+
+		-- Publish everything found, ticked or not, so the picker can
+		-- show you what's out there.
+		local seen, names = {}, {}
+		for _, model in ipairs(pool) do
+			if not seen[model.Name] then
+				seen[model.Name] = true
+				table.insert(names, model.Name)
+			end
+		end
+		table.sort(names)
+		Pets.names = names
+
+		local out = {}
+		for _, model in ipairs(pool) do
+			if not owned[model] and chosen(model.Name) then table.insert(out, model) end
 		end
 		return out
 	end
@@ -2087,7 +2169,9 @@ do
 			else
 				local models = petModels()
 				if #models == 0 then
-					Pets.status = "no pets found on the map"
+					Pets.status = #Pets.names > 0
+						and (#Pets.names .. " on the map, none ticked")
+						or "no pets found on the map"
 				else
 					local model = models[1]
 					local position = positionOf(model)
@@ -3163,7 +3247,7 @@ do
 	local note = Instance.new("TextLabel")
 	note.BackgroundTransparency = 1
 	note.Position = UDim2.new(0, 16, 0, 122)
-	note.Size = UDim2.new(1, -32, 0, 48)
+	note.Size = UDim2.new(1, -32, 0, 30)
 	note.Font = Enum.Font.Gotham
 	note.Text = ""
 	note.TextColor3 = Color3.fromRGB(200, 200, 205)
@@ -3173,9 +3257,153 @@ do
 	note.TextYAlignment = Enum.TextYAlignment.Top
 	note.Parent = petsPage
 
+	-- Which pets to buy. Nothing ticked means any, so it works out of
+	-- the box; tick some and it buys only those.
+	local bulkRow = Instance.new("Frame")
+	bulkRow.BackgroundTransparency = 1
+	bulkRow.Position = UDim2.new(0, 16, 0, 156)
+	bulkRow.Size = UDim2.new(1, -32, 0, 24)
+	bulkRow.Parent = petsPage
+
+	local bulkLayout = Instance.new("UIListLayout")
+	bulkLayout.FillDirection = Enum.FillDirection.Horizontal
+	bulkLayout.Padding = UDim.new(0, 6)
+	bulkLayout.Parent = bulkRow
+
+	local allBtn = pillButton(bulkRow, "Select All", 90)
+	local noneBtn = pillButton(bulkRow, "None", 90)
+
+	local list = Instance.new("ScrollingFrame")
+	list.Position = UDim2.new(0, 16, 0, 186)
+	list.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Pets - 186 - 8)
+	list.BackgroundTransparency = 1
+	list.CanvasSize = UDim2.new(0, 0, 0, 0)
+	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	list.ScrollBarThickness = 3
+	list.ScrollBarImageTransparency = 0.4
+	list.BorderSizePixel = 0
+	list.Parent = petsPage
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 4)
+	listLayout.Parent = list
+
+	local entries = {}
+	local query = ""
+
+	local function rebuild()
+		for _, child in ipairs(list:GetChildren()) do
+			if child:IsA("Frame") then child:Destroy() end
+		end
+		entries = {}
+
+		for _, name in ipairs(Shovel.pets.names) do
+			local row = Instance.new("Frame")
+			row.Size = UDim2.new(1, 0, 0, 28)
+			row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			row.BackgroundTransparency = 0.93
+			row.Visible = matchesQuery(name, query)
+			row.Parent = list
+
+			local rowCorner = Instance.new("UICorner")
+			rowCorner.CornerRadius = UDim.new(0, 8)
+			rowCorner.Parent = row
+
+			local label = Instance.new("TextLabel")
+			label.BackgroundTransparency = 1
+			label.Position = UDim2.new(0, 10, 0, 0)
+			label.Size = UDim2.new(1, -46, 1, 0)
+			label.Font = Enum.Font.Gotham
+			label.Text = name
+			label.TextColor3 = Color3.fromRGB(230, 230, 235)
+			label.TextSize = 12
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextTruncate = Enum.TextTruncate.AtEnd
+			label.Parent = row
+
+			local toggle = Instance.new("TextButton")
+			toggle.Position = UDim2.new(1, -34, 0.5, -9)
+			toggle.Size = UDim2.new(0, 26, 0, 18)
+			toggle.AutoButtonColor = false
+			toggle.Text = ""
+			toggle.Parent = row
+
+			local toggleCorner = Instance.new("UICorner")
+			toggleCorner.CornerRadius = UDim.new(1, 0)
+			toggleCorner.Parent = toggle
+
+			local knob = Instance.new("Frame")
+			knob.Size = UDim2.new(0, 14, 0, 14)
+			knob.Position = UDim2.new(0, 2, 0.5, -7)
+			knob.Parent = toggle
+			local knobCorner = Instance.new("UICorner")
+			knobCorner.CornerRadius = UDim.new(1, 0)
+			knobCorner.Parent = knob
+
+			local function paint()
+				local on = Shovel.pets.selected[name] == true
+				toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
+				knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+				knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+			end
+			paint()
+
+			toggle.MouseButton1Click:Connect(function()
+				Shovel.pets.selected[name] = not (Shovel.pets.selected[name] == true)
+				paint()
+			end)
+
+			table.insert(entries, { name = name, paint = paint, frame = row })
+		end
+	end
+
+	searchBox(bulkRow, function(text)
+		query = text
+		for _, entry in ipairs(entries) do
+			entry.frame.Visible = matchesQuery(entry.name, query)
+		end
+	end)
+
+	allBtn.MouseButton1Click:Connect(function()
+		for _, entry in ipairs(entries) do
+			if entry.frame.Visible then
+				Shovel.pets.selected[entry.name] = true
+				entry.paint()
+			end
+		end
+	end)
+	noneBtn.MouseButton1Click:Connect(function()
+		for _, entry in ipairs(entries) do
+			if entry.frame.Visible then
+				Shovel.pets.selected[entry.name] = false
+				entry.paint()
+			end
+		end
+	end)
+
+	RemoteRepaint.pets = function()
+		for _, entry in ipairs(entries) do
+			entry.paint()
+		end
+	end
+
+	rebuild()
+
 	task.spawn(function()
-		while task.wait(0.3) do
-			note.Text = string.format("Bought: %d · %s", Shovel.pets.bought, Shovel.pets.status)
+		local shown = ""
+		while task.wait(0.4) do
+			-- Rebuild only when the map's pet list actually changes.
+			local signature = table.concat(Shovel.pets.names, "|")
+			if signature ~= shown then
+				shown = signature
+				rebuild()
+			end
+			note.Text = string.format(
+				"Bought: %d · %s%s",
+				Shovel.pets.bought,
+				Shovel.pets.status,
+				Shovel.pets.strict and "" or " (no pet markers — matching loosely)"
+			)
 			note.TextColor3 = Shovel.pets.bought > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
 		end
 	end)
@@ -3654,6 +3882,10 @@ do
 			RemoteRepaint.shovel()
 		end
 
+		if applySelection(Shovel.pets.selected, config.petsWanted) and RemoteRepaint.pets then
+			RemoteRepaint.pets()
+		end
+
 		Shovel.pets.enabled = switch("petsEnabled", config.petsEnabled, Shovel.pets.enabled)
 		Shovel.pets.follow = slider("petsFollow", config.petsFollow, Shovel.pets.follow, 0.01, 1)
 		Shovel.pets.defend = slider("petsDefend", config.petsDefend, Shovel.pets.defend, 0, 60)
@@ -3719,6 +3951,7 @@ do
 			petsStatus = Shovel.pets.status,
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
+			mapPets = Shovel.pets.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
@@ -3732,6 +3965,7 @@ do
 				drops = RemoteSelectedList(CollectSelected),
 				harvestExcluded = RemoteSelectedList(HarvestExcluded),
 				shovel = RemoteSelectedList(Shovel.selected),
+				pets = RemoteSelectedList(Shovel.pets.selected),
 			},
 		}
 	end
@@ -4059,6 +4293,7 @@ do
 			collectItems = listOf(CollectSelected),
 			harvestExcluded = listOf(HarvestExcluded),
 			shovelPlants = listOf(Shovel.selected),
+			petsWanted = listOf(Shovel.pets.selected),
 		}
 	end
 
@@ -4090,6 +4325,9 @@ do
 		end
 		if fill(Shovel.selected, saved.shovelPlants) and RemoteRepaint.shovel then
 			pcall(RemoteRepaint.shovel)
+		end
+		if fill(Shovel.pets.selected, saved.petsWanted) and RemoteRepaint.pets then
+			pcall(RemoteRepaint.pets)
 		end
 
 		if saved.plantMode and RemoteRepaint.plantMode then

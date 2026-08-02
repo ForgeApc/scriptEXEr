@@ -1138,7 +1138,7 @@ runScript(toRun)
 
   function hudShovelHtml(status) {
     const s = status || {};
-    const found = typeof s.shovelStatus === "string" && s.shovelStatus.startsWith("using ");
+    const found = (s.shoveled || 0) > 0;
     return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
   }
 

@@ -985,7 +985,6 @@ local Shovel = {
 	interval = 0.5,
 	selected = {}, -- plant name -> true
 	removed = 0,
-	remote = nil,
 	status = "idle",
 	names = {}, -- what's actually growing, for the picker
 }
@@ -1056,32 +1055,20 @@ do
 		return false
 	end
 
-	local function findRemotes()
-		local found = {}
-		local function walk(node, prefix, depth)
-			if depth > 3 or type(node) ~= "table" then return end
-			pcall(function()
-				for key, value in pairs(node) do
-					local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
-					local lower = path:lower()
-					if
-						lower:find("shovel")
-						or lower:find("remove")
-						or lower:find("destroy")
-						or lower:find("delete")
-						or lower:find("dig")
-					then
-						if type(value) == "table" and type(value.Fire) == "function" then
-							table.insert(found, { path = path, remote = value })
-						end
-					end
-					if type(value) == "table" then walk(value, path, depth + 1) end
-				end
-			end)
-		end
-		walk(Networking, "", 1)
-		return found
-	end
+	-- Captured off the game's own call with a hook on every remote:
+	--   Shovel.UseShovel(<plant instance name>, "", "Shovel", <Tool>)
+	-- The first argument is the plant's full instance name
+	-- ("<userid>_<guid>"), not its PlantId attribute.
+	local UseShovel = nil
+	pcall(function() UseShovel = Networking.Shovel.UseShovel end)
+
+	-- Ground truth for a removal, so the counter reflects plants that
+	-- actually went away rather than requests sent.
+	pcall(function()
+		Networking.Garden.PlantRemoved.OnClientEvent:Connect(function()
+			Shovel.removed += 1
+		end)
+	end)
 
 	-- The server acts on what you're holding, same as seeds.
 	local function equipShovel()
@@ -1112,37 +1099,26 @@ do
 	end
 
 	local function digUp(plant)
+		if not UseShovel then
+			Shovel.status = "this world has no Shovel.UseShovel remote"
+			return false
+		end
+
 		local tool = equipShovel()
-		local id = plant:GetAttribute("PlantId")
-		local attempts = { { id }, { plant }, { id, tool }, { plant, tool }, { id, plant } }
-		local candidates = Shovel.remote and { Shovel.remote } or findRemotes()
-
-		for _, entry in ipairs(candidates) do
-			for _, args in ipairs(attempts) do
-				pcall(function() entry.remote:Fire(table.unpack(args)) end)
-				-- Removal replicates; give it a moment before judging.
-				local deadline = tick() + 0.35
-				while tick() < deadline do
-					if not plant.Parent then
-						Shovel.remote = entry
-						Shovel.status = "using " .. entry.path
-						Shovel.removed += 1
-						return true
-					end
-					task.wait(0.05)
-				end
-				-- Once the remote is known, don't grind through the
-				-- other shapes on every plant.
-				if Shovel.remote then break end
-			end
+		if not tool then
+			Shovel.status = "no Shovel in your inventory"
+			return false
 		end
 
-		if #candidates == 0 then
-			Shovel.status = "no removal remote found in this world"
-		elseif not Shovel.remote then
-			Shovel.status = #candidates .. " candidate remote(s), none removed a plant yet"
+		local ok = pcall(function()
+			UseShovel:Fire(plant.Name, "", "Shovel", tool)
+		end)
+		if ok then
+			Shovel.status = "digging"
+		else
+			Shovel.status = "UseShovel rejected the call"
 		end
-		return false
+		return ok
 	end
 
 	-- What's growing right now, for the picker. Refreshed on a slow
@@ -1188,8 +1164,10 @@ do
 					end
 
 					if target then
-						Shovel.status = string.format("digging · %d of %d match", matching, total)
 						digUp(target)
+						if Shovel.status == "digging" then
+							Shovel.status = string.format("digging · %d of %d match", matching, total)
+						end
 					else
 						Shovel.status = string.format("none of %d plants match your picks", total)
 					end
@@ -2947,7 +2925,7 @@ do
 					rebuild()
 				end
 				shovelStatusLabel.Text = string.format("Dug up: %d · %s", Shovel.removed, Shovel.status)
-				shovelStatusLabel.TextColor3 = Shovel.remote and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
+				shovelStatusLabel.TextColor3 = Shovel.removed > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
 			end
 		end)
 	end

@@ -1398,3 +1398,53 @@ body {
   margin-top: 8px;
   accent-color: #78ffaa;
 }
+
+.hud-subtabs,
+.hud-bulk {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 10px 0 8px;
+}
+.hud-pill {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #b4b4b9;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hud-pill.active { background: rgba(255, 255, 255, 0.25); color: #fff; }
+
+.hud-list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hud-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.hud-item-name {
+  flex: 1 1 auto;
+  font-size: 0.78rem;
+  color: #e6e6eb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud-stock {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+}
+.hud-stock.in { color: #78ffaa; }
+.hud-stock.out { color: #82828a; }

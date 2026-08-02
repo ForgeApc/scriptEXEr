@@ -1117,6 +1117,44 @@ end
 -- the remote config uses. Populated at each widget's call site.
 local RemoteWidgets = {}
 
+-- Repaint hooks for the list-based tabs, which have no single widget to
+-- set: applying a selection remotely has to redraw whole rows.
+local RemoteRepaint = {}
+
+-- A selection set ({name = true}) as a sorted array, which is what
+-- travels over the wire and what the site draws from.
+local function RemoteSelectedList(set)
+	local names = {}
+	for name, on in pairs(set or {}) do
+		if on then table.insert(names, name) end
+	end
+	table.sort(names)
+	return names
+end
+
+-- The live shop catalogue: every item the panel can list, with whether
+-- it is in stock right now. Read fresh each time so the site shows the
+-- same stock state the game does.
+local function RemoteCatalogue()
+	local out = {}
+	for _, entry in ipairs({
+		{ key = "Seeds", stock = SeedsStock },
+		{ key = "Gears", stock = GearsStock },
+		{ key = "Crates", stock = CratesStock },
+	}) do
+		local list = {}
+		for _, item in ipairs(entry.stock:GetChildren()) do
+			table.insert(list, {
+				name = item.Name,
+				inStock = (item.Value or 0) > 0,
+			})
+		end
+		table.sort(list, function(a, b) return a.name < b.name end)
+		out[entry.key] = list
+	end
+	return out
+end
+
 local function createSlider(parent, y, labelText, min, max, default, unit, onChange)
 	local row = Instance.new("Frame")
 	row.BackgroundTransparency = 1
@@ -1699,6 +1737,11 @@ end
 paintSubTabs()
 buildList(activeSubTab)
 
+-- Remote control redraws the same way a sub-tab switch does.
+RemoteRepaint.buy = function()
+	buildList(activeSubTab)
+end
+
 --========================================================
 -- PLANT page
 --========================================================
@@ -1748,6 +1791,11 @@ for _, mode in ipairs(plantModes) do
 	end)
 end
 paintPlantModes()
+
+RemoteRepaint.plantMode = function(mode)
+	PlantMode = mode
+	paintPlantModes()
+end
 
 -- Pins the fixed-mode spot to wherever you're standing right now.
 local setFixedBtn = pillButton(plantPage, "Set fixed spot to where I'm standing", 268)
@@ -1917,6 +1965,12 @@ do
 	end
 end
 
+RemoteRepaint.plant = function()
+	for _, entry in ipairs(plantRowEntries) do
+		entry.paint()
+	end
+end
+
 plantAllBtn.MouseButton1Click:Connect(function()
 	for _, entry in ipairs(plantRowEntries) do
 		PlantSelected[entry.name] = true
@@ -2080,6 +2134,12 @@ do
 		end)
 
 		table.insert(dropsRowEntries, { name = name, paint = paint })
+	end
+end
+
+RemoteRepaint.drops = function()
+	for _, entry in ipairs(dropsRowEntries) do
+		entry.paint()
 	end
 end
 
@@ -2338,6 +2398,18 @@ do
 	-- widget's own onChange sets the variable, so the switch and the
 	-- value can never disagree — a remote change looks exactly like one
 	-- made by hand.
+	-- Selection lists arrive as arrays of names. Applying them means
+	-- repainting the matching rows too, or the panel would show old
+	-- switches over new behaviour.
+	local function applySelection(target, names)
+		if type(names) ~= "table" then return false end
+		for key in pairs(target) do target[key] = nil end
+		for _, name in ipairs(names) do
+			if type(name) == "string" then target[name] = true end
+		end
+		return true
+	end
+
 	local function applyConfig(config)
 		if type(config) ~= "table" then return end
 
@@ -2371,11 +2443,25 @@ do
 		CollectReturn = switch("collectReturn", config.collectReturn, CollectReturn)
 		CollectDwell = slider("collectDwell", config.collectDwell, CollectDwell, 0.01, 2)
 
-		-- Seed selection, sent as a list of names.
-		if type(config.plantSeeds) == "table" then
-			PlantSelected = {}
-			for _, name in ipairs(config.plantSeeds) do
-				if type(name) == "string" then PlantSelected[name] = true end
+		-- Shop selection, per category.
+		local rebuiltBuy = false
+		for _, category in ipairs({ "Seeds", "Gears", "Crates" }) do
+			local names = config["buy" .. category]
+			if applySelection(Selected[category], names) then rebuiltBuy = true end
+		end
+		if rebuiltBuy and RemoteRepaint.buy then RemoteRepaint.buy() end
+
+		if applySelection(PlantSelected, config.plantSeeds) and RemoteRepaint.plant then
+			RemoteRepaint.plant()
+		end
+
+		if applySelection(CollectSelected, config.collectItems) and RemoteRepaint.drops then
+			RemoteRepaint.drops()
+		end
+
+		if config.plantMode == "me" or config.plantMode == "random" or config.plantMode == "fixed" then
+			if config.plantMode ~= PlantMode and RemoteRepaint.plantMode then
+				RemoteRepaint.plantMode(config.plantMode)
 			end
 		end
 	end
@@ -2403,6 +2489,34 @@ do
 			spent = TotalSpent,
 			net = net,
 			perSecond = elapsed > 0 and (net / elapsed) or 0,
+			plantMode = PlantMode,
+			hasFixedSpot = PlantFixedPosition ~= nil,
+			-- Every switch's live value, so the site mirrors the panel
+			-- even when it was changed in game rather than remotely.
+			settings = {
+				buyInterval = BuyInterval,
+				plantEnabled = PlantEnabled,
+				plantInterval = PlantInterval,
+				harvestEnabled = HarvestEnabled,
+				harvestInterval = HarvestInterval,
+				sellEnabled = SellEnabled,
+				sellInterval = SellInterval,
+				collectEnabled = CollectEnabled,
+				collectEverything = CollectEverything,
+				collectReturn = CollectReturn,
+				collectDwell = CollectDwell,
+			},
+			-- The catalogue and the current selections, so the site can
+			-- draw the same rows with the same switches rather than
+			-- asking you to type item names.
+			items = RemoteCatalogue(),
+			selected = {
+				Seeds = RemoteSelectedList(Selected.Seeds),
+				Gears = RemoteSelectedList(Selected.Gears),
+				Crates = RemoteSelectedList(Selected.Crates),
+				plant = RemoteSelectedList(PlantSelected),
+				drops = RemoteSelectedList(CollectSelected),
+			},
 		}
 	end
 

@@ -861,6 +861,8 @@ runScript(toRun)
       controls: [
         { key: "buyInterval", label: "Buy interval", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
+      // Sub-tabs, bulk buttons and per-item switches, same as in game.
+      list: "buy",
     },
     {
       name: "Plant",
@@ -868,6 +870,8 @@ runScript(toRun)
         { key: "plantEnabled", label: "Enable Auto Plant", type: "toggle" },
         { key: "plantInterval", label: "Plant delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
+      modes: true,
+      list: "plant",
     },
     {
       name: "Drops",
@@ -877,11 +881,13 @@ runScript(toRun)
         { key: "collectEverything", label: "Collect everything dropped", type: "toggle" },
         { key: "collectDwell", label: "Pickup dwell", type: "slider", min: 0.01, max: 2, step: 0.01, unit: "s" },
       ],
+      list: "drops",
     },
     {
       name: "Harvest",
       controls: [
         { key: "harvestEnabled", label: "Enable Auto Harvest", type: "toggle" },
+        { note: "Harvests ripe crops first, then attempts still-growing ones too." },
         { key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
     },
@@ -914,6 +920,7 @@ runScript(toRun)
   }
 
   function hudControlHtml(control, config) {
+    if (control.note) return `<div class="hud-note">${escapeHtml(control.note)}</div>`;
     const value = config[control.key];
     if (control.type === "toggle") {
       return `
@@ -967,6 +974,99 @@ runScript(toRun)
     );
   }
 
+  // The selectable rows for a tab, drawn from the catalogue the script
+  // publishes — real in-game item names and live stock, not a guess.
+  function hudListItems(kind, status, subTab) {
+    const items = (status && status.items) || {};
+    if (kind === "buy") {
+      const cats = subTab === "All" ? ["Seeds", "Gears", "Crates"] : [subTab];
+      const out = [];
+      cats.forEach((cat) => {
+        (items[cat] || []).forEach((it) =>
+          out.push({ name: it.name, category: cat, inStock: it.inStock })
+        );
+      });
+      return out;
+    }
+    // Plant and Drops both list seeds.
+    return (items.Seeds || []).map((it) => ({ name: it.name, category: "Seeds" }));
+  }
+
+  function hudSelectedSet(kind, status, subTab) {
+    const sel = (status && status.selected) || {};
+    if (kind === "plant") return new Set(sel.plant || []);
+    if (kind === "drops") return new Set(sel.drops || []);
+    const cats = subTab === "All" ? ["Seeds", "Gears", "Crates"] : [subTab];
+    const set = new Set();
+    cats.forEach((cat) => (sel[cat] || []).forEach((n) => set.add(cat + "\u0000" + n)));
+    return set;
+  }
+
+  function hudListHtml(kind, status, subTab) {
+    const items = hudListItems(kind, status, subTab);
+    const selected = hudSelectedSet(kind, status, subTab);
+    if (!items.length) {
+      return `<div class="hud-note">Waiting for the script's item list…</div>`;
+    }
+    const subTabs =
+      kind === "buy"
+        ? `<div class="hud-subtabs">${["All", "Seeds", "Gears", "Crates"]
+            .map(
+              (t) =>
+                `<button class="hud-pill${t === subTab ? " active" : ""}" data-subtab="${t}">${t}</button>`
+            )
+            .join("")}</div>`
+        : "";
+    const bulk = `
+      <div class="hud-bulk">
+        <button class="hud-pill" data-bulk="all">Select All</button>
+        <button class="hud-pill" data-bulk="none">None</button>
+        ${kind === "buy"
+          ? ["Seeds", "Gears", "Crates"]
+              .map((c) => `<button class="hud-pill" data-bulk="cat:${c}">All ${c}</button>`)
+              .join("")
+          : ""}
+      </div>`;
+    const rows = items
+      .map((it) => {
+        const id = kind === "buy" ? it.category + "\u0000" + it.name : it.name;
+        const on = selected.has(id);
+        return `
+        <div class="hud-item">
+          <span class="hud-item-name">${escapeHtml(it.name)}</span>
+          ${it.inStock === undefined
+            ? ""
+            : `<span class="hud-stock ${it.inStock ? "in" : "out"}">${it.inStock ? "In stock" : "Out of stock"}</span>`}
+          <button class="hud-toggle${on ? " on" : ""}" data-item="${escapeHtml(it.name)}"
+                  data-category="${it.category}" role="switch" aria-checked="${on}"
+                  aria-label="${escapeHtml(it.name)}"><span class="hud-knob"></span></button>
+        </div>`;
+      })
+      .join("");
+    return subTabs + bulk + `<div class="hud-list">${rows}</div>`;
+  }
+
+  function hudModesHtml(status) {
+    const current = (status && status.plantMode) || "me";
+    const modes = [
+      ["me", "At me"],
+      ["random", "Random"],
+      ["fixed", "Fixed"],
+    ];
+    return `
+      <div class="hud-bulk">
+        ${modes
+          .map(
+            ([key, label]) =>
+              `<button class="hud-pill${key === current ? " active" : ""}" data-mode="${key}">${label}</button>`
+          )
+          .join("")}
+      </div>
+      ${current === "fixed" && !(status && status.hasFixedSpot)
+        ? `<div class="hud-note bad">No fixed spot set — pin one from the in-game panel.</div>`
+        : ""}`;
+  }
+
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -980,7 +1080,11 @@ runScript(toRun)
           ).join("")}
         </div>
         <div class="hud-body">
-          ${tab.stats ? hudStatsHtml(status) : tab.controls.map((c) => hudControlHtml(c, config)).join("")}
+          ${tab.stats
+            ? hudStatsHtml(status)
+            : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
+              (tab.modes ? hudModesHtml(status) : "") +
+              (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;
   }
@@ -1011,7 +1115,7 @@ runScript(toRun)
 
   // Live state for the control page. Kept out of the DOM so a re-render
   // never loses which session we're talking to or which tab you're on.
-  const controlState = { code: null, config: {}, status: {}, tab: "Buy", timer: null };
+  const controlState = { code: null, config: {}, status: {}, tab: "Buy", subTab: "All", timer: null };
 
   function renderControlStatus(session) {
     const el = document.getElementById("controlStatus");
@@ -1035,10 +1139,26 @@ runScript(toRun)
     el.className = "control-status" + (age !== null && age < 10 ? " good" : " bad");
   }
 
+  // A cheap fingerprint of what the panel is currently showing, so a
+  // selection changed from inside the game gets picked up on the next
+  // poll without repainting (and fighting) anything else.
+  function hudSelectionSignature() {
+    const st = controlState.status;
+    const sel = st.selected || {};
+    // Settings are in here too: a switch flipped inside the game has to
+    // show up on the site the same way a remote change does.
+    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, st.plantMode, st.settings]);
+  }
+
   function paintHud(rebuild) {
     const panels = document.getElementById("controlPanels");
     if (!panels) return;
     const onStats = controlState.tab === "Stats";
+    const signature = hudSelectionSignature();
+    if (!rebuild && signature !== controlState.signature && !controlState.dragging) {
+      rebuild = true;
+    }
+    controlState.signature = signature;
     // Controls are rebuilt only on demand — repainting them under a
     // finger mid-drag would fight the user. Stats are read-only, so
     // they refresh every poll.
@@ -1063,9 +1183,35 @@ runScript(toRun)
     controlState.code = code;
     controlState.status = session.status || {};
     if (rebuild) {
-      controlState.config = session.config || {};
       localStorage.setItem("scriptexer_control_code", code);
     }
+    // The script is the source of truth: whatever it reports is what the
+    // site shows, so changes made on the in-game panel appear here on
+    // their own. Our config copy only carries writes still in flight.
+    controlState.config = Object.assign(
+      {},
+      session.config || {},
+      controlState.status.settings || {}
+    );
+
+    // Drop pending selection writes the script has confirmed, so its
+    // own state takes over again and an in-game change isn't masked by
+    // a stale local copy.
+    const sel = controlState.status.selected || {};
+    const confirmed = {
+      buySeeds: sel.Seeds,
+      buyGears: sel.Gears,
+      buyCrates: sel.Crates,
+      plantSeeds: sel.plant,
+      collectItems: sel.drops,
+    };
+    Object.keys(confirmed).forEach((key) => {
+      const pending = controlState.config[key];
+      if (Array.isArray(pending) && JSON.stringify(pending.slice().sort()) === JSON.stringify((confirmed[key] || []).slice().sort())) {
+        delete controlState.config[key];
+      }
+    });
+
     paintHud(rebuild);
   }
 
@@ -1101,6 +1247,32 @@ runScript(toRun)
       }
     };
 
+    // Selections live in status (the script owns them) but are sent as
+    // config. Keep a local copy so a click shows immediately instead of
+    // waiting out the next poll.
+    const selectionKey = (kind, category) =>
+      kind === "buy" ? "buy" + category : kind === "plant" ? "plantSeeds" : "collectItems";
+
+    const currentSelection = (kind, category) => {
+      const key = selectionKey(kind, category);
+      if (Array.isArray(controlState.config[key])) return controlState.config[key].slice();
+      const sel = controlState.status.selected || {};
+      const fromStatus =
+        kind === "buy" ? sel[category] : kind === "plant" ? sel.plant : sel.drops;
+      return (fromStatus || []).slice();
+    };
+
+    const setSelection = (kind, category, names) => {
+      const key = selectionKey(kind, category);
+      controlState.config[key] = names;
+      send(key, names);
+    };
+
+    const listKind = () => {
+      const tab = CONTROL_TABS.find((t) => t.name === controlState.tab);
+      return tab && tab.list;
+    };
+
     panels.addEventListener("click", (e) => {
       const tabBtn = e.target.closest("[data-tab]");
       if (tabBtn) {
@@ -1108,6 +1280,68 @@ runScript(toRun)
         paintHud(true);
         return;
       }
+
+      const subTabBtn = e.target.closest("[data-subtab]");
+      if (subTabBtn) {
+        controlState.subTab = subTabBtn.getAttribute("data-subtab");
+        paintHud(true);
+        return;
+      }
+
+      const modeBtn = e.target.closest("[data-mode]");
+      if (modeBtn) {
+        const mode = modeBtn.getAttribute("data-mode");
+        controlState.status.plantMode = mode;
+        send("plantMode", mode);
+        paintHud(true);
+        return;
+      }
+
+      const kind = listKind();
+
+      const bulkBtn = e.target.closest("[data-bulk]");
+      if (bulkBtn && kind) {
+        const action = bulkBtn.getAttribute("data-bulk");
+        const shown = hudListItems(kind, controlState.status, controlState.subTab);
+        if (kind === "buy") {
+          // Each category is its own config key, so bulk actions have to
+          // be applied per category rather than as one flat list.
+          ["Seeds", "Gears", "Crates"].forEach((cat) => {
+            const inCat = shown.filter((it) => it.category === cat).map((it) => it.name);
+            if (action === "none") setSelection(kind, cat, []);
+            else if (action === "all" && inCat.length) setSelection(kind, cat, inCat);
+            else if (action === "cat:" + cat) setSelection(kind, cat, (controlState.status.items[cat] || []).map((i) => i.name));
+          });
+        } else {
+          setSelection(kind, null, action === "all" ? shown.map((it) => it.name) : []);
+        }
+        // Repaint from our own copy; the script's echo arrives later.
+        controlState.status.selected = Object.assign({}, controlState.status.selected, {
+          Seeds: controlState.config.buySeeds || (controlState.status.selected || {}).Seeds,
+          Gears: controlState.config.buyGears || (controlState.status.selected || {}).Gears,
+          Crates: controlState.config.buyCrates || (controlState.status.selected || {}).Crates,
+          plant: controlState.config.plantSeeds || (controlState.status.selected || {}).plant,
+          drops: controlState.config.collectItems || (controlState.status.selected || {}).drops,
+        });
+        paintHud(true);
+        return;
+      }
+
+      const itemToggle = e.target.closest("[data-item]");
+      if (itemToggle && kind) {
+        const name = itemToggle.getAttribute("data-item");
+        const category = itemToggle.getAttribute("data-category");
+        const list = currentSelection(kind, category);
+        const at = list.indexOf(name);
+        const next = !itemToggle.classList.contains("on");
+        if (next && at === -1) list.push(name);
+        if (!next && at !== -1) list.splice(at, 1);
+        itemToggle.classList.toggle("on", next);
+        itemToggle.setAttribute("aria-checked", String(next));
+        setSelection(kind, category, list);
+        return;
+      }
+
       const toggle = e.target.closest('[data-type="toggle"]');
       if (toggle) {
         const key = toggle.getAttribute("data-control");
@@ -1116,6 +1350,14 @@ runScript(toRun)
         toggle.setAttribute("aria-checked", String(next));
         send(key, next);
       }
+    });
+
+    // A poll must never repaint a slider you're holding.
+    panels.addEventListener("pointerdown", (e) => {
+      if (e.target.closest('[data-type="slider"]')) controlState.dragging = true;
+    });
+    window.addEventListener("pointerup", () => {
+      controlState.dragging = false;
     });
 
     // Sliders track the number while dragging but only send the settled

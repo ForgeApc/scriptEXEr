@@ -1552,7 +1552,7 @@ local TOP_OFFSET = 74 -- title + top tab bar
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(1, 0)
-frame.Position = UDim2.new(1, -18, 0, 50)
+frame.Position = UDim2.new(1, -18, 0, 18)
 frame.Size = UDim2.new(0, 420, 0, TOP_OFFSET + PAGE_HEIGHTS.Buy + 8)
 frame.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 frame.BackgroundTransparency = 0.04
@@ -3525,7 +3525,9 @@ do
 					end
 					call("PATCH", "sessions?code=eq." .. Code, { status = currentStatus() })
 				end
-				task.wait(2)
+				-- 0.5s, so a switch flipped on the site lands almost
+				-- immediately rather than after a visible pause.
+				task.wait(0.5)
 			end
 		end)
 
@@ -3554,8 +3556,8 @@ do
 	perfGui.Parent = gui.Parent
 
 	local pill = Instance.new("Frame")
-	pill.AnchorPoint = Vector2.new(1, 0)
-	pill.Position = UDim2.new(1, -18, 0, 18)
+	pill.AnchorPoint = Vector2.new(0, 0)
+	pill.Position = UDim2.new(0, 18, 0, 18)
 	pill.Size = UDim2.new(0, 74, 0, 24)
 	pill.BackgroundColor3 = Color3.fromRGB(14, 14, 16)
 	pill.BackgroundTransparency = 0.04

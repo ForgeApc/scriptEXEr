@@ -1212,9 +1212,9 @@ runScript(toRun)
     if (s.bought !== undefined) parts.push(`${s.bought} bought`);
     // A stale heartbeat is the difference between "your settings will
     // apply" and "you're editing a row nothing is reading."
-    if (age !== null) parts.push(age < 10 ? "live" : `last seen ${age}s ago`);
+    if (age !== null) parts.push(age < 4 ? "live" : `last seen ${age}s ago`);
     el.textContent = parts.join(" · ");
-    el.className = "control-status" + (age !== null && age < 10 ? " good" : " bad");
+    el.className = "control-status" + (age !== null && age < 4 ? " good" : " bad");
   }
 
   // A cheap fingerprint of what the panel is currently showing, so a
@@ -1394,7 +1394,9 @@ runScript(toRun)
       if (!code) return;
       refreshControl(code, true);
       clearInterval(controlState.timer);
-      controlState.timer = setInterval(() => refreshControl(code, false), 2000);
+      // Matches the script's own poll, so a change made in game shows
+      // here about as fast as one made here reaches the game.
+      controlState.timer = setInterval(() => refreshControl(code, false), 500);
     };
 
     linkBtn.addEventListener("click", link);

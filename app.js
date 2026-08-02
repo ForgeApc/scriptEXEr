@@ -874,15 +874,6 @@ runScript(toRun)
       list: "plant",
     },
     {
-      name: "Shovel",
-      controls: [
-        { key: "shovelEnabled", label: "Enable Auto Shovel", type: "toggle" },
-        { key: "shovelOnlySelected", label: "Only seeds ticked on Plant", type: "toggle" },
-        { key: "shovelInterval", label: "Shovel delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-      ],
-      shovel: true,
-    },
-    {
       name: "Drops",
       controls: [
         { key: "collectEnabled", label: "Enable Auto Collect", type: "toggle" },
@@ -908,7 +899,6 @@ runScript(toRun)
       ],
     },
     { name: "Stats", stats: true },
-    { name: "Presets", presets: true },
   ];
 
   // Same formatting rules as the script's Stats tab, so a number never
@@ -1077,38 +1067,6 @@ runScript(toRun)
         : ""}`;
   }
 
-  function hudShovelHtml(status) {
-    const s = status || {};
-    const found = typeof s.shovelStatus === "string" && s.shovelStatus.startsWith("using ");
-    return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
-  }
-
-  function hudPresetsHtml(status) {
-    const owner = (status && status.player) || null;
-    if (!owner) {
-      return `<div class="hud-note">Link a running script first — presets are saved per player.</div>`;
-    }
-    const rows = controlState.presets
-      .map(
-        (preset) => `
-        <div class="hud-item">
-          <span class="hud-item-name">${escapeHtml(preset.name)}</span>
-          <button class="hud-pill${preset.autoload ? " active" : ""}" data-autoload="${preset.id}"
-                  title="Apply this automatically when the script starts">${preset.autoload ? "★ Auto" : "☆ Auto"}</button>
-          <button class="hud-pill" data-load="${preset.id}">Load</button>
-          <button class="hud-pill" data-delete="${preset.id}">✕</button>
-        </div>`
-      )
-      .join("");
-    return `
-      <div class="hud-note">Saved for ${escapeHtml(owner)}. The ★ preset is applied automatically when the script starts.</div>
-      <div class="hud-bulk">
-        <input class="hud-preset-name" id="presetName" type="text" placeholder="Preset name" maxlength="40">
-        <button class="hud-pill active" data-save="1">Save current</button>
-      </div>
-      <div class="hud-list">${rows || `<div class="hud-note">No presets saved yet.</div>`}</div>`;
-  }
-
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -1124,11 +1082,8 @@ runScript(toRun)
         <div class="hud-body">
           ${tab.stats
             ? hudStatsHtml(status)
-            : tab.presets
-            ? hudPresetsHtml(status)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
               (tab.modes ? hudModesHtml(status) : "") +
-              (tab.shovel ? hudShovelHtml(status) : "") +
               (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;
@@ -1160,7 +1115,7 @@ runScript(toRun)
 
   // Live state for the control page. Kept out of the DOM so a re-render
   // never loses which session we're talking to or which tab you're on.
-  const controlState = { code: null, config: {}, status: {}, tab: "Buy", subTab: "All", presets: [], timer: null };
+  const controlState = { code: null, config: {}, status: {}, tab: "Buy", subTab: "All", timer: null };
 
   function renderControlStatus(session) {
     const el = document.getElementById("controlStatus");
@@ -1258,73 +1213,6 @@ runScript(toRun)
     });
 
     paintHud(rebuild);
-
-    // Presets belong to the player, which we only learn from a linked
-    // script — so they're fetched once the link resolves, not on load.
-    const owner = controlState.status.player;
-    if (owner && owner !== controlState.presetOwner) {
-      controlState.presetOwner = owner;
-      refreshPresets();
-    }
-  }
-
-  async function refreshPresets() {
-    const owner = controlState.presetOwner;
-    if (!owner) return;
-    try {
-      controlState.presets = await Presets.list(owner);
-    } catch (e) {
-      controlState.presets = [];
-    }
-    if (controlState.tab === "Presets") paintHud(true);
-  }
-
-  // Save / load / delete / autoload. Saving captures the script's own
-  // reported settings and selections, not our local copy, so a preset
-  // records what the game is actually doing.
-  async function handlePresetClick(btn, panels) {
-    const owner = controlState.presetOwner;
-    if (!owner) return;
-
-    try {
-      if (btn.hasAttribute("data-save")) {
-        const input = panels.querySelector("#presetName");
-        const name = (input && input.value.trim()) || "";
-        if (!name) {
-          showToast("Give the preset a name first");
-          return;
-        }
-        const st = controlState.status;
-        const sel = st.selected || {};
-        const config = Object.assign({}, st.settings || {}, {
-          plantMode: st.plantMode,
-          buySeeds: sel.Seeds || [],
-          buyGears: sel.Gears || [],
-          buyCrates: sel.Crates || [],
-          plantSeeds: sel.plant || [],
-          collectItems: sel.drops || [],
-        });
-        await Presets.save(owner, name, config);
-        if (input) input.value = "";
-        showToast(`Saved "${name}"`);
-      } else if (btn.hasAttribute("data-load")) {
-        const preset = controlState.presets.find((p) => p.id === btn.getAttribute("data-load"));
-        if (!preset) return;
-        await Control.updateConfig(controlState.code, preset.config);
-        showToast(`Loaded "${preset.name}"`);
-      } else if (btn.hasAttribute("data-delete")) {
-        await Presets.remove(btn.getAttribute("data-delete"));
-      } else if (btn.hasAttribute("data-autoload")) {
-        const id = btn.getAttribute("data-autoload");
-        const already = controlState.presets.find((p) => p.id === id && p.autoload);
-        // Clicking the current ★ clears it, so autoload can be turned off.
-        await Presets.setAutoload(owner, already ? null : id);
-      }
-      await refreshPresets();
-      paintHud(true);
-    } catch (err) {
-      showToast(err.message || "Preset action failed");
-    }
   }
 
   function bindControlEvents() {
@@ -1406,12 +1294,6 @@ runScript(toRun)
         controlState.status.plantMode = mode;
         send("plantMode", mode);
         paintHud(true);
-        return;
-      }
-
-      const presetBtn = e.target.closest("[data-load], [data-delete], [data-autoload], [data-save]");
-      if (presetBtn) {
-        handlePresetClick(presetBtn, panels);
         return;
       }
 

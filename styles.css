@@ -1448,15 +1448,3 @@ body {
 }
 .hud-stock.in { color: #78ffaa; }
 .hud-stock.out { color: #82828a; }
-
-.hud-preset-name {
-  flex: 1 1 130px;
-  padding: 4px 10px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  font: inherit;
-  font-size: 0.72rem;
-}
-.hud-preset-name::placeholder { color: #82828a; }

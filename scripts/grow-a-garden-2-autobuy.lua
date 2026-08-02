@@ -1360,6 +1360,10 @@ end
 -- already lying around can never disagree about what counts as loot.
 function Drop.isCollectable(prompt)
 	if Drop.isGarden(prompt) then return false end
+	-- Pets are Humanoid models you buy by holding E, and they look a lot
+	-- like loot sitting on the ground. Collecting must never be the
+	-- thing that spends your Sheckles — that's the Pets tab's job, where
+	-- you asked for it.
 	if Drop.isNpc(prompt) then return false end
 	-- A drop marker outranks the price test: a pet a player dropped is
 	-- loot even if its prompt still mentions a price.
@@ -1932,6 +1936,7 @@ Shovel.pets = {
 	defend = 18, -- studs; someone closer than this gets hit
 	bought = 0,
 	status = "off",
+	busy = false, -- buying or escorting; blocks starting another
 }
 
 do
@@ -2036,8 +2041,15 @@ do
 		return false
 	end
 
+	-- Escort until the pet is actually home: it vanishes into the base,
+	-- or it stops moving for a few seconds because it has arrived. The
+	-- old fixed timeout meant walking away from a pet still in transit
+	-- to go buy another one.
 	local function escort(model)
-		local deadline = tick() + 90
+		local deadline = tick() + 180
+		local lastPosition = nil
+		local stillSince = tick()
+
 		while tick() < deadline and Pets.enabled and model and model.Parent do
 			local position = positionOf(model)
 			if not position then break end
@@ -2049,6 +2061,15 @@ do
 			if not defend(position) then
 				Pets.status = "escorting a pet home"
 			end
+
+			if lastPosition and (position - lastPosition).Magnitude > 1 then
+				stillSince = tick()
+			elseif tick() - stillSince > 4 then
+				Pets.status = "pet arrived"
+				return
+			end
+			lastPosition = position
+
 			task.wait(Pets.follow)
 		end
 	end
@@ -2059,6 +2080,10 @@ do
 				Pets.status = "off"
 			elseif not VIM then
 				Pets.status = "this executor has no VirtualInputManager"
+			elseif Pets.busy then
+				-- One at a time: leaving a pet mid-walk to go buy
+				-- another is how you lose both.
+				task.wait(0.25)
 			else
 				local models = petModels()
 				if #models == 0 then
@@ -2067,6 +2092,7 @@ do
 					local model = models[1]
 					local position = positionOf(model)
 					if position then
+						Pets.busy = true
 						local root = Drop.getRoot()
 						local origin = root and root.CFrame
 						if root then
@@ -2098,6 +2124,7 @@ do
 
 						local rootNow = Drop.getRoot()
 						if rootNow and origin then rootNow.CFrame = origin end
+						Pets.busy = false
 					end
 				end
 			end

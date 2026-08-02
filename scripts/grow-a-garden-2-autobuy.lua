@@ -836,6 +836,156 @@ task.spawn(function()
 end)
 
 --========================================================
+-- SHOVEL — digs up plants on your plot.
+--
+-- The remote isn't named in anything we've dumped, so rather than
+-- guessing one name and failing silently, the module is searched for a
+-- remote whose path reads like a removal, and the first one the game
+-- confirms (by a plant actually disappearing) is kept.
+--
+-- All of its state lives on one table: the file is already close to
+-- Lua's 200-locals-per-scope ceiling.
+--========================================================
+local Shovel = {
+	enabled = false,
+	interval = 0.5,
+	onlySelected = false, -- restrict to the seeds ticked on Plant
+	removed = 0,
+	remote = nil,
+	status = "idle",
+}
+
+do
+	local function findRemotes()
+		local found = {}
+		local function walk(node, prefix, depth)
+			if depth > 3 or type(node) ~= "table" then return end
+			pcall(function()
+				for key, value in pairs(node) do
+					local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
+					local lower = path:lower()
+					if
+						lower:find("shovel")
+						or lower:find("remove")
+						or lower:find("destroy")
+						or lower:find("delete")
+						or lower:find("dig")
+					then
+						if type(value) == "table" and type(value.Fire) == "function" then
+							table.insert(found, { path = path, remote = value })
+						end
+					end
+					if type(value) == "table" then walk(value, path, depth + 1) end
+				end
+			end)
+		end
+		walk(Networking, "", 1)
+		return found
+	end
+
+	-- Equipping the Shovel matters for the same reason it did for seeds:
+	-- the server acts on what you're holding.
+	local function equipShovel()
+		local player = Players.LocalPlayer
+		local character = player.Character
+		if not character then return nil end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then return nil end
+
+		local function find(container)
+			if not container then return nil end
+			for _, tool in ipairs(container:GetChildren()) do
+				if tool:IsA("Tool") and tool.Name:lower():find("shovel") then return tool end
+			end
+			return nil
+		end
+
+		local tool = find(character) or find(player:FindFirstChildOfClass("Backpack"))
+		if not tool then return nil end
+		if tool.Parent ~= character then
+			pcall(function() humanoid:EquipTool(tool) end)
+			local deadline = tick() + 0.4
+			while tick() < deadline and tool.Parent ~= character do
+				task.wait(0.03)
+			end
+		end
+		return tool
+	end
+
+	local function targets()
+		local out = {}
+		local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+		if not plantsFolder then return out end
+		for _, plant in ipairs(plantsFolder:GetChildren()) do
+			local keep = true
+			if Shovel.onlySelected then
+				-- Match the Plant tab's ticks, loosely, since plot plants
+				-- carry the world-prefixed names too.
+				keep = false
+				local name = plant.Name:lower()
+				for seedName, on in pairs(PlantSelected) do
+					if on then
+						local wanted = seedName:lower()
+						if name == wanted or name:find(wanted, 1, true) then
+							keep = true
+							break
+						end
+					end
+				end
+			end
+			if keep then table.insert(out, plant) end
+		end
+		return out
+	end
+
+	local function digUp(plant)
+		local tool = equipShovel()
+		local id = plant:GetAttribute("PlantId")
+		-- Several plausible argument shapes; the surviving one is
+		-- whichever makes the plant actually vanish.
+		local attempts = { { id }, { plant }, { id, tool }, { plant, tool }, { id, plant } }
+		local candidates = Shovel.remote and { Shovel.remote } or findRemotes()
+
+		for _, entry in ipairs(candidates) do
+			for _, args in ipairs(attempts) do
+				pcall(function() entry.remote:Fire(table.unpack(args)) end)
+				-- A removal replicates; give it a moment before judging.
+				local deadline = tick() + 0.35
+				while tick() < deadline do
+					if not plant.Parent then
+						Shovel.remote = entry
+						Shovel.status = "using " .. entry.path
+						Shovel.removed += 1
+						return true
+					end
+					task.wait(0.05)
+				end
+			end
+		end
+
+		if #candidates == 0 then
+			Shovel.status = "no removal remote found in this world"
+		elseif not Shovel.remote then
+			Shovel.status = #candidates .. " candidate remote(s), none removed a plant yet"
+		end
+		return false
+	end
+
+	task.spawn(function()
+		while task.wait(Shovel.interval) do
+			if Shovel.enabled then
+				local list = targets()
+				if #list == 0 then
+					Shovel.status = OwnerPlot and "nothing to dig up" or "locating your plot…"
+				else
+					digUp(list[1])
+				end
+			end
+		end
+	end)
+end
+
+--========================================================
 -- DROPS — teleports to dropped items the moment they appear.
 --
 -- The Networking dump has DroppedItem.PickupFx and RequestDrop but no
@@ -2354,156 +2504,6 @@ runBuyLoop(GearsStock, PurchaseGears, "Gears")
 runBuyLoop(CratesStock, PurchaseCrates, "Crates")
 
 setActivePage("Buy")
-
---========================================================
--- SHOVEL — digs up plants on your plot.
---
--- The remote isn't named in anything we've dumped, so rather than
--- guessing one name and failing silently, the module is searched for a
--- remote whose path reads like a removal, and the first one the game
--- confirms (by a plant actually disappearing) is kept.
---
--- All of its state lives on one table: the file is already close to
--- Lua's 200-locals-per-scope ceiling.
---========================================================
-local Shovel = {
-	enabled = false,
-	interval = 0.5,
-	onlySelected = false, -- restrict to the seeds ticked on Plant
-	removed = 0,
-	remote = nil,
-	status = "idle",
-}
-
-do
-	local function findRemotes()
-		local found = {}
-		local function walk(node, prefix, depth)
-			if depth > 3 or type(node) ~= "table" then return end
-			pcall(function()
-				for key, value in pairs(node) do
-					local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
-					local lower = path:lower()
-					if
-						lower:find("shovel")
-						or lower:find("remove")
-						or lower:find("destroy")
-						or lower:find("delete")
-						or lower:find("dig")
-					then
-						if type(value) == "table" and type(value.Fire) == "function" then
-							table.insert(found, { path = path, remote = value })
-						end
-					end
-					if type(value) == "table" then walk(value, path, depth + 1) end
-				end
-			end)
-		end
-		walk(Networking, "", 1)
-		return found
-	end
-
-	-- Equipping the Shovel matters for the same reason it did for seeds:
-	-- the server acts on what you're holding.
-	local function equipShovel()
-		local player = Players.LocalPlayer
-		local character = player.Character
-		if not character then return nil end
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if not humanoid then return nil end
-
-		local function find(container)
-			if not container then return nil end
-			for _, tool in ipairs(container:GetChildren()) do
-				if tool:IsA("Tool") and tool.Name:lower():find("shovel") then return tool end
-			end
-			return nil
-		end
-
-		local tool = find(character) or find(player:FindFirstChildOfClass("Backpack"))
-		if not tool then return nil end
-		if tool.Parent ~= character then
-			pcall(function() humanoid:EquipTool(tool) end)
-			local deadline = tick() + 0.4
-			while tick() < deadline and tool.Parent ~= character do
-				task.wait(0.03)
-			end
-		end
-		return tool
-	end
-
-	local function targets()
-		local out = {}
-		local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
-		if not plantsFolder then return out end
-		for _, plant in ipairs(plantsFolder:GetChildren()) do
-			local keep = true
-			if Shovel.onlySelected then
-				-- Match the Plant tab's ticks, loosely, since plot plants
-				-- carry the world-prefixed names too.
-				keep = false
-				local name = plant.Name:lower()
-				for seedName, on in pairs(PlantSelected) do
-					if on then
-						local wanted = seedName:lower()
-						if name == wanted or name:find(wanted, 1, true) then
-							keep = true
-							break
-						end
-					end
-				end
-			end
-			if keep then table.insert(out, plant) end
-		end
-		return out
-	end
-
-	local function digUp(plant)
-		local tool = equipShovel()
-		local id = plant:GetAttribute("PlantId")
-		-- Several plausible argument shapes; the surviving one is
-		-- whichever makes the plant actually vanish.
-		local attempts = { { id }, { plant }, { id, tool }, { plant, tool }, { id, plant } }
-		local candidates = Shovel.remote and { Shovel.remote } or findRemotes()
-
-		for _, entry in ipairs(candidates) do
-			for _, args in ipairs(attempts) do
-				pcall(function() entry.remote:Fire(table.unpack(args)) end)
-				-- A removal replicates; give it a moment before judging.
-				local deadline = tick() + 0.35
-				while tick() < deadline do
-					if not plant.Parent then
-						Shovel.remote = entry
-						Shovel.status = "using " .. entry.path
-						Shovel.removed += 1
-						return true
-					end
-					task.wait(0.05)
-				end
-			end
-		end
-
-		if #candidates == 0 then
-			Shovel.status = "no removal remote found in this world"
-		elseif not Shovel.remote then
-			Shovel.status = #candidates .. " candidate remote(s), none removed a plant yet"
-		end
-		return false
-	end
-
-	task.spawn(function()
-		while task.wait(Shovel.interval) do
-			if Shovel.enabled then
-				local list = targets()
-				if #list == 0 then
-					Shovel.status = OwnerPlot and "nothing to dig up" or "locating your plot…"
-				else
-					digUp(list[1])
-				end
-			end
-		end
-	end)
-end
 
 --========================================================
 -- REMOTE CONTROL

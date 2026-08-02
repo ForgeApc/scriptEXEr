@@ -1936,41 +1936,71 @@ Shovel.pets = {
 
 do
 	local Pets = Shovel.pets
-	local function petPrompts()
+	local VIM = nil
+	pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+	-- There is no prompt on these pets: you stand near one and hold E,
+	-- and the game charges you. So the purchase is a real key press,
+	-- driven through VirtualInputManager, rather than a remote we could
+	-- fire directly.
+	local function holdE(seconds)
+		if not VIM then return false end
+		local ok = pcall(function()
+			VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+		end)
+		if not ok then return false end
+		task.wait(seconds)
+		pcall(function()
+			VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		end)
+		return true
+	end
+
+	-- Without a prompt to key off, a pet is a Model with a Humanoid that
+	-- is nobody's character and isn't a shopkeeper. Anything already
+	-- following you is skipped: it's yours, and buying it again is just
+	-- teleporting to your own pet forever.
+	local function isPlayerCharacter(model)
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player.Character == model then return true end
+		end
+		return false
+	end
+
+	local function looksLikeVendor(model)
+		local name = model.Name:lower()
+		return name:find("npc") or name:find("vendor") or name:find("merchant") or name:find("shop")
+	end
+
+	local owned = {}
+
+	local function petModels()
 		local out = {}
 		for _, inst in ipairs(Workspace:GetDescendants()) do
-			if inst:IsA("ProximityPrompt") then
-				local ok, buyable = pcall(Drop.isPurchase, inst)
-				-- A purchase prompt that isn't a shopkeeper is a pet for
-				-- sale on the map.
-				if ok and buyable and not Drop.isNpc(inst) and not Drop.isGarden(inst) then
-					table.insert(out, inst)
-				end
+			if
+				inst:IsA("Model")
+				and not owned[inst]
+				and inst:FindFirstChildOfClass("Humanoid")
+				and not isPlayerCharacter(inst)
+				and not looksLikeVendor(inst)
+			then
+				local ok, garden = pcall(function()
+					return inst:GetAttribute("PlantId") ~= nil or inst:GetAttribute("Owner") ~= nil
+				end)
+				if ok and not garden then table.insert(out, inst) end
 			end
 		end
 		return out
 	end
 
-	local function modelOf(prompt)
-		local node = prompt.Parent
-		local depth = 0
-		while node and node ~= Workspace and depth < 4 do
-			if node:IsA("Model") then return node end
-			node = node.Parent
-			depth += 1
-		end
-		return nil
-	end
-
 	local function positionOf(model)
-		if not model then return nil end
+		if not model or not model.Parent then return nil end
 		local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
 		return part and part.Position or nil
 	end
 
 	-- Someone standing next to your pet is there to take it. One tap of
-	-- the shovel, not a hold: this mirrors what the tool does when you
-	-- click it yourself.
+	-- the shovel, not a hold: this mirrors clicking the tool yourself.
 	local function defend(position)
 		local me = Players.LocalPlayer
 		for _, other in ipairs(Players:GetPlayers()) do
@@ -2007,7 +2037,7 @@ do
 	end
 
 	local function escort(model)
-		local deadline = tick() + 60
+		local deadline = tick() + 90
 		while tick() < deadline and Pets.enabled and model and model.Parent do
 			local position = positionOf(model)
 			if not position then break end
@@ -2027,13 +2057,14 @@ do
 		while task.wait(0.25) do
 			if not Pets.enabled then
 				Pets.status = "off"
+			elseif not VIM then
+				Pets.status = "this executor has no VirtualInputManager"
 			else
-				local prompts = petPrompts()
-				if #prompts == 0 then
-					Pets.status = "no pets for sale on the map"
+				local models = petModels()
+				if #models == 0 then
+					Pets.status = "no pets found on the map"
 				else
-					local prompt = prompts[1]
-					local model = modelOf(prompt)
+					local model = models[1]
 					local position = positionOf(model)
 					if position then
 						local root = Drop.getRoot()
@@ -2041,21 +2072,32 @@ do
 						if root then
 							root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
 						end
-						task.wait(0.15)
-						Pets.status = "buying"
-						triggerPrompt(prompt)
-						task.wait(0.35)
+						task.wait(0.2)
 
-						-- The prompt disappearing is the sale going
-						-- through; nothing else confirms it.
-						if not prompt.Parent then
+						Pets.status = "holding E to buy"
+						-- Nothing announces the sale, but it costs
+						-- Sheckles — so the balance falling is the
+						-- confirmation. Without this, failing to afford
+						-- a pet would send it chasing a stranger's pet
+						-- around the map for a minute and a half.
+						local before = getCurrentSheckles()
+						holdE(1.2)
+						task.wait(0.4)
+						local after = getCurrentSheckles()
+
+						if before and after and after >= before then
+							-- Not ours. Skip it so the next pass tries a
+							-- different one instead of retrying forever.
+							owned[model] = true
+							Pets.status = "couldn't buy — Sheckles didn't change"
+						else
+							owned[model] = true
 							Pets.bought += 1
 							escort(model)
-							local rootNow = Drop.getRoot()
-							if rootNow and origin then rootNow.CFrame = origin end
-						else
-							Pets.status = "couldn't buy — probably not enough Sheckles"
 						end
+
+						local rootNow = Drop.getRoot()
+						if rootNow and origin then rootNow.CFrame = origin end
 					end
 				end
 			end

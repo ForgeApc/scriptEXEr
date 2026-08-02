@@ -598,6 +598,19 @@ end)
 local PlantEnabled = false
 local PlantInterval = 0.5
 local PlantSelected = {} -- seed name -> true
+
+-- Declared up here, not down in the SHOVEL section, because the plant
+-- loop has to know whether shovelling wants the tool.
+local Shovel = {
+	enabled = false,
+	interval = 0.5,
+	selected = {}, -- plant name -> true
+	removed = 0,
+	status = "idle",
+	names = {}, -- what's actually growing, for the picker
+	pending = 0, -- plants matching your picks, right now
+}
+
 local PlantArgOrder = nil -- nil = not yet determined, then "pos_first" / "name_first"
 local PlantFiredCount = 0
 local PlantLastFired = ""
@@ -910,13 +923,17 @@ end
 -- actually arrived in your hands.
 local PlantRotateIndex = 0
 
+-- Returns false when none of the selected seeds exist in your
+-- inventory, which is how the caller knows to stop rotating rather than
+-- churning through tool swaps that can never plant anything.
 local function equipNextSelectedSeed()
 	local names = selectedSeedNames()
-	if #names == 0 then return end
+	if #names == 0 then return false end
 	for _ = 1, #names do
 		PlantRotateIndex = (PlantRotateIndex % #names) + 1
-		if resolveSeedTool(names[PlantRotateIndex]) then return end
+		if resolveSeedTool(names[PlantRotateIndex]) then return true end
 	end
+	return false
 end
 
 -- How long to keep planting one seed before moving to the next. Short
@@ -928,7 +945,13 @@ local PlantCurrentName = nil
 
 task.spawn(function()
 	while task.wait(PlantInterval) do
-		if PlantEnabled then
+		-- Both features fight over the equipped tool: planting equips a
+		-- seed, shovelling equips the Shovel, and each undoes the other.
+		-- Shovelling yields nothing useful without its tool, and it has
+		-- a finite amount of work, so it wins while it has plants to
+		-- dig. Planting also has no business swapping tools when none of
+		-- the selected seeds are actually in your inventory.
+		if PlantEnabled and not (Shovel.enabled and Shovel.pending > 0) then
 			local names = selectedSeedNames()
 			-- Plant whatever selected seed is actually in your hands.
 			-- Only a settled equip makes the server accept a plant.
@@ -959,10 +982,12 @@ task.spawn(function()
 						resolveSeedTool(tool.Name)
 					end
 				end
-			else
-				-- Nothing selected is held, so there's nothing the game
-				-- will let us plant — equip one and pick it up next tick.
-				equipNextSelectedSeed()
+			elseif not equipNextSelectedSeed() then
+				-- Out of seeds entirely. Swapping tools now would only
+				-- take the Shovel out of your hands for nothing, so sit
+				-- out until some are bought.
+				PlantCurrentName = nil
+				task.wait(1)
 			end
 		end
 	end
@@ -980,14 +1005,6 @@ end)
 -- Everything lives on one table: the main chunk is at Lua's 200-locals
 -- ceiling.
 --========================================================
-local Shovel = {
-	enabled = false,
-	interval = 0.5,
-	selected = {}, -- plant name -> true
-	removed = 0,
-	status = "idle",
-	names = {}, -- what's actually growing, for the picker
-}
 
 do
 	-- This game stores the crop on the plant as SeedName ("Strawberry"),
@@ -1146,12 +1163,14 @@ do
 	task.spawn(function()
 		while task.wait(Shovel.interval) do
 			if not Shovel.enabled then
+				Shovel.pending = 0
 				-- Say so plainly. "idle" left it ambiguous whether the
 				-- feature was off, finding nothing, or broken.
 				Shovel.status = "off — turn on Auto Shovel"
 			else
 				local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
 				if not plantsFolder then
+					Shovel.pending = 0
 					Shovel.status = "locating your plot…"
 				else
 					local target, matching, total = nil, 0, 0
@@ -1163,6 +1182,7 @@ do
 						end
 					end
 
+					Shovel.pending = matching
 					if target then
 						digUp(target)
 						if Shovel.status == "digging" then

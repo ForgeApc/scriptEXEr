@@ -3523,7 +3523,14 @@ do
 					if type(rows) == "table" and rows[1] then
 						applyConfig(rows[1].config)
 					end
-					call("PATCH", "sessions?code=eq." .. Code, { status = currentStatus() })
+					-- updated_at has to be written explicitly: the column
+					-- only defaults on insert, so without this it kept
+					-- the registration time forever and the site read a
+					-- healthy script as one that vanished long ago.
+					call("PATCH", "sessions?code=eq." .. Code, {
+						status = currentStatus(),
+						updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+					})
 				end
 				-- 0.5s, so a switch flipped on the site lands almost
 				-- immediately rather than after a visible pause.

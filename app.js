@@ -1212,7 +1212,11 @@ runScript(toRun)
     if (s.bought !== undefined) parts.push(`${s.bought} bought`);
     // A stale heartbeat is the difference between "your settings will
     // apply" and "you're editing a row nothing is reading."
-    if (age !== null) parts.push(age < 4 ? "live" : `last seen ${age}s ago`);
+    // While the heartbeat is fresh, how long it has been running is the
+    // useful number; "last seen" only means anything once it stops.
+    if (age !== null) {
+      parts.push(age < 4 ? `working for ${hudElapsed(s.elapsed)}` : `last seen ${age}s ago`);
+    }
     el.textContent = parts.join(" · ");
     el.className = "control-status" + (age !== null && age < 4 ? " good" : " bad");
   }

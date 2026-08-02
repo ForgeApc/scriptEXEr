@@ -1279,6 +1279,50 @@ function Drop.isGarden(prompt)
 	return false
 end
 
+-- Pets and crates that spawn around the map are for sale, not loot:
+-- walking up and triggering their prompt spends your Sheckles. Only
+-- what a player dropped should be collected.
+--
+-- Purchasable things announce themselves — a Buy/Purchase prompt, or a
+-- price on the object — so they're rejected outright. Dropped things
+-- carry a drop marker, and are always accepted.
+function Drop.isPurchase(prompt)
+	local text = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "")):lower()
+	if text:find("buy") or text:find("purchase") or text:find("cost") or text:find("price") then
+		return true
+	end
+	if text:find("%$") or text:find("¢") then return true end
+
+	local node = prompt.Parent
+	local depth = 0
+	while node and node ~= Workspace and depth < 4 do
+		if node:GetAttribute("Price") ~= nil or node:GetAttribute("Cost") ~= nil then
+			return true
+		end
+		node = node.Parent
+		depth += 1
+	end
+	return false
+end
+
+function Drop.isDropped(prompt)
+	local node = prompt.Parent
+	local depth = 0
+	while node and node ~= Workspace and depth < 6 do
+		if
+			node:GetAttribute("DroppedBy") ~= nil
+			or node:GetAttribute("DropId") ~= nil
+			or node:GetAttribute("Dropped") ~= nil
+		then
+			return true
+		end
+		if node.Name:lower():find("drop") then return true end
+		node = node.Parent
+		depth += 1
+	end
+	return false
+end
+
 -- What to call a prompt's item, for filtering and for the status line.
 local function promptName(prompt)
 	if prompt.ObjectText and prompt.ObjectText ~= "" then
@@ -1347,6 +1391,9 @@ Workspace.DescendantAdded:Connect(function(inst)
 	if not CollectEnabled then return end
 	if not inst:IsA("ProximityPrompt") then return end
 	if Drop.isGarden(inst) then return end
+	-- A drop marker beats every other test; otherwise anything for sale
+	-- is left alone.
+	if not Drop.isDropped(inst) and Drop.isPurchase(inst) then return end
 	if not matchesCollectFilter(promptName(inst)) then return end
 	table.insert(CollectPending, inst)
 end)
@@ -1357,8 +1404,10 @@ task.spawn(function()
 			local target = table.remove(CollectPending, 1)
 			-- Re-checked here as well: a prompt can be queued before its
 			-- plant finishes parenting into the plot.
-			if target and target.Parent and Drop.isGarden(target) then
-				target = nil
+			if target and target.Parent then
+				if Drop.isGarden(target) or (not Drop.isDropped(target) and Drop.isPurchase(target)) then
+					target = nil
+				end
 			end
 			local name = "?"
 			pcall(function() name = promptName(target) end)

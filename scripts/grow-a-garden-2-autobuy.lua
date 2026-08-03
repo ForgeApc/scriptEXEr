@@ -323,286 +323,10 @@ end
 --========================================================
 local Selected = { Seeds = {}, Gears = {}, Crates = {} }
 
-local function isSelected(category, name)
-	local v = Selected[category][name]
-	if v == nil then return false end -- default off until toggled
-	return v
-end
-
-local function countSelected()
-	local n = 0
-	for _, items in pairs(Selected) do
-		for _, on in pairs(items) do
-			if on then n += 1 end
-		end
-	end
-	return n
-end
-
-local BuyInterval = 0.5
-
--- Live proof-of-activity state.
-local BuyFiredCount = 0 -- selected items that got a Fire() call
-local BuyLastFired = ""
-
--- Fires the purchase remote for every selected item on every pass,
--- unconditionally — regardless of stock status or whether you can
--- currently afford it. The server decides whether the purchase goes
--- through; this just keeps asking. (canAfford still exists and is
--- used elsewhere, but is intentionally NOT checked here anymore.)
-local function runBuyLoop(stockFolder, remote, category)
-	-- The shop's contents barely change, but GetChildren allocates a
-	-- fresh table on every call — at a 0.001s interval across three
-	-- loops that is thousands of throwaway tables a second. Cache it and
-	-- refresh only when the folder actually changes.
-	local cached = stockFolder:GetChildren()
-	local function recache()
-		cached = stockFolder:GetChildren()
-	end
-	stockFolder.ChildAdded:Connect(recache)
-	stockFolder.ChildRemoved:Connect(recache)
-
-	task.spawn(function()
-		while task.wait(BuyInterval) do
-			if Shovel.stopped then return end
-			for _, item in ipairs(cached) do
-				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
-					BuyFiredCount += 1
-					BuyLastFired = category .. " · " .. item.Name
-					-- No logging here. This runs once per selected item
-					-- per tick, and at a 0.001s interval with a full
-					-- selection that was tens of thousands of console
-					-- writes a second — a large source of the lag people
-					-- blamed on rendering. The Buy tab's counter already
-					-- shows the same information.
-					pcall(function()
-						remote:Fire(item.Name)
-					end)
-				end
-			end
-		end
-	end)
-end
-
---========================================================
--- HARVEST — finds your plot, harvests ripe fruit first, then
--- attempts still-growing ones too.
---========================================================
--- Finding your plot.
---
--- This previously did WaitForChild("Gardens") with no timeout and
--- stopped searching once it found a plot. Both broke on other worlds:
--- a world without a folder literally named "Gardens" made it yield
--- forever (killing harvest AND random-mode planting with no error),
--- and travelling to another world left it pointing at the old world's
--- plot because the search had already exited.
---
--- Now it scans any Workspace container for a plot attributed to you,
--- and keeps re-checking so world travel is picked up.
-local OwnerPlot = nil
-
-local function findOwnerPlot()
-	local myName = Players.LocalPlayer.Name
-	for _, container in ipairs(Workspace:GetChildren()) do
-		if container:IsA("Folder") or container:IsA("Model") then
-			local ok, children = pcall(function() return container:GetChildren() end)
-			if ok then
-				for _, plot in ipairs(children) do
-					if plot:GetAttribute("Owner") == myName then
-						return plot
-					end
-				end
-			end
-		end
-	end
-	return nil
-end
-
-task.spawn(function()
-	while true do
-		-- Re-resolve if we've never found one, or if the one we had has
-		-- been unparented (which is what happens on world travel).
-		if not OwnerPlot or not OwnerPlot.Parent then
-			OwnerPlot = findOwnerPlot()
-		end
-		task.wait(OwnerPlot and 2 or 0.25)
-	end
-end)
-
-local function isGrown(plant)
-	local maxAge = plant:GetAttribute("MaxAge")
-	local currentAge = plant:GetAttribute("Age")
-	if maxAge == nil or currentAge == nil then return false end
-	return currentAge >= maxAge
-end
-
--- Crops you never want picked. Keyed by the shop seed name the Harvest
--- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
--- matching is loose in the same way planting's is.
-local HarvestExcluded = {}
-local HarvestSkipped = 0 -- plants left alone by the exclusion list
-
--- What a plant "is" isn't reliably its instance name: plots often name
--- children by id and keep the crop type in an attribute. Matching only
--- on .Name meant exclusions silently never fired, so every plausible
--- identifying field is checked.
-local function plantNames(plant)
-	-- SeedName is where this game keeps the crop ("Strawberry"), matching
-	-- the shop names the exclusion list shows. Everything else is a
-	-- fallback for other worlds.
-	local names = {}
-	local seedName = plant:GetAttribute("SeedName")
-	if type(seedName) == "string" and seedName ~= "" then
-		table.insert(names, seedName)
-	end
-	table.insert(names, plant.Name)
-	local ok, attrs = pcall(function() return plant:GetAttributes() end)
-	if ok and attrs then
-		for key, value in pairs(attrs) do
-			if type(value) == "string" and value ~= "" then
-				local k = tostring(key):lower()
-				-- PlantId is a guid and PlantType is the literal word
-				-- "Plant"; neither identifies a crop.
-				local useless = k == "plantid" or k == "planttype" or k == "userid"
-				if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop")) then
-					table.insert(names, value)
-				end
-			end
-		end
-	end
-	return names
-end
-
-local function isHarvestExcluded(plant)
-	-- Accepts an Instance or a plain string, since fruits are checked
-	-- by name too.
-	local names = typeof(plant) == "Instance" and plantNames(plant) or { tostring(plant) }
-	for seedName, on in pairs(HarvestExcluded) do
-		if on then
-			local wanted = seedName:lower()
-			for _, candidate in ipairs(names) do
-				local name = tostring(candidate):lower()
-				if name == wanted or name:find(wanted, 1, true) then return true end
-			end
-		end
-	end
-	return false
-end
-
-local function getHarvestTargets()
-	local targets = {}
-	local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
-	if not plantsFolder then return targets end
-
-	for _, plant in pairs(plantsFolder:GetChildren()) do
-		if isHarvestExcluded(plant) then
-			HarvestSkipped += 1
-			continue
-		end
-		local fruitsFolder = plant:FindFirstChild("Fruits")
-		if fruitsFolder then
-			for _, fruit in pairs(fruitsFolder:GetChildren()) do
-				-- Fruits are checked as well: on some plots the crop
-				-- type shows up on the fruit rather than its parent.
-				if fruit:IsA("Model") and not isHarvestExcluded(fruit) then
-					table.insert(targets, fruit)
-				end
-			end
-		elseif plant:IsA("Model") then
-			table.insert(targets, plant)
-		end
-	end
-
-	return targets
-end
-
-
-local function harvestOne(target)
-	local id = target:GetAttribute("PlantId")
-	local fruitId = target:GetAttribute("FruitId") or ""
-	if id then
-		CollectFruit:Fire(id, fruitId)
-	end
-end
-
-local HarvestEnabled = false
-local HarvestInterval = 0.5
-
-task.spawn(function()
-	-- Ripe first, still-growing after — as two passes rather than a sort.
-	-- table.sort calls the comparator O(n log n) times and each call read
-	-- two attributes off both plants; on a large garden that alone was
-	-- tens of thousands of property reads per scan.
-	local function orderHarvestTargets(targets)
-		local ripe, growing = {}, {}
-		for _, target in ipairs(targets) do
-			if isGrown(target) then
-				table.insert(ripe, target)
-			else
-				table.insert(growing, target)
-			end
-		end
-		for _, target in ipairs(growing) do
-			table.insert(ripe, target)
-		end
-		return ripe
-	end
-
-	-- Two separate costs on a big garden, both fixed here.
-	--
-	-- Scanning: walking every plant and fruit is far too expensive to
-	-- redo every tick, so a scan is reused for a second.
-	--
-	-- Firing: the loop used to send a harvest request for EVERY fruit on
-	-- the plot on EVERY tick. With thousands of plants at a 0.001s delay
-	-- that is millions of remote calls a minute — the script flooding
-	-- itself. It now works through the list a slice at a time, picking
-	-- up where it left off, so a huge garden costs the same per tick as
-	-- a small one and simply takes more ticks to come round again.
-	local BATCH = 40
-	local cachedTargets, cachedAt, cursor = {}, 0, 1
-
-	while task.wait(HarvestInterval) do
-		if Shovel.stopped then return end
-		if HarvestEnabled and OwnerPlot then
-			if tick() - cachedAt > 1 then
-				cachedTargets = orderHarvestTargets(getHarvestTargets())
-				cachedAt = tick()
-				cursor = 1
-			end
-
-			local count = #cachedTargets
-			if count > 0 then
-				for _ = 1, math.min(BATCH, count) do
-					local target = cachedTargets[cursor]
-					if target and target.Parent then
-						harvestOne(target)
-					end
-					cursor += 1
-					if cursor > count then cursor = 1 end
-				end
-			end
-		end
-	end
-end)
-
---========================================================
--- PLANT — fires Networking.Plant.PlantSeed for each selected seed.
---
--- The remote's argument ORDER isn't discoverable from the module dump
--- (its Writes serializers are opaque), and guessing wrong would fail
--- silently. So instead of hardcoding a guess, the first plant attempt
--- tries position-first, and if that errors, seed-name-first — then
--- remembers whichever succeeded for the rest of the session. The
--- game's typed serializers reject mismatched argument types, which is
--- what makes this detectable rather than a coin flip.
---========================================================
-local PlantEnabled = false
-local PlantInterval = 0.5
-local PlantSelected = {} -- seed name -> true
-
--- Declared up here, not down in the SHOVEL section, because the plant
--- loop has to know whether shovelling wants the tool.
+-- Declared at the very top, not down in the SHOVEL section. Loops far
+-- above it read Shovel.stopped and Shovel.pending, and a local
+-- declared later is a nil global to the code above it — which is
+-- exactly how the buy loops died on their first tick.
 local Shovel = {
 	enabled = false,
 	interval = 0.5,
@@ -2000,6 +1724,286 @@ Shovel.pets = {
 	seen = 0, -- how many are queued for buying right now
 	strict = false, -- true when real pet markers were found
 }
+
+
+local function isSelected(category, name)
+	local v = Selected[category][name]
+	if v == nil then return false end -- default off until toggled
+	return v
+end
+
+local function countSelected()
+	local n = 0
+	for _, items in pairs(Selected) do
+		for _, on in pairs(items) do
+			if on then n += 1 end
+		end
+	end
+	return n
+end
+
+local BuyInterval = 0.5
+
+-- Live proof-of-activity state.
+local BuyFiredCount = 0 -- selected items that got a Fire() call
+local BuyLastFired = ""
+
+-- Fires the purchase remote for every selected item on every pass,
+-- unconditionally — regardless of stock status or whether you can
+-- currently afford it. The server decides whether the purchase goes
+-- through; this just keeps asking. (canAfford still exists and is
+-- used elsewhere, but is intentionally NOT checked here anymore.)
+local function runBuyLoop(stockFolder, remote, category)
+	-- The shop's contents barely change, but GetChildren allocates a
+	-- fresh table on every call — at a 0.001s interval across three
+	-- loops that is thousands of throwaway tables a second. Cache it and
+	-- refresh only when the folder actually changes.
+	local cached = stockFolder:GetChildren()
+	local function recache()
+		cached = stockFolder:GetChildren()
+	end
+	stockFolder.ChildAdded:Connect(recache)
+	stockFolder.ChildRemoved:Connect(recache)
+
+	task.spawn(function()
+		while task.wait(BuyInterval) do
+			if Shovel.stopped then return end
+			for _, item in ipairs(cached) do
+				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
+					BuyFiredCount += 1
+					BuyLastFired = category .. " · " .. item.Name
+					-- No logging here. This runs once per selected item
+					-- per tick, and at a 0.001s interval with a full
+					-- selection that was tens of thousands of console
+					-- writes a second — a large source of the lag people
+					-- blamed on rendering. The Buy tab's counter already
+					-- shows the same information.
+					pcall(function()
+						remote:Fire(item.Name)
+					end)
+				end
+			end
+		end
+	end)
+end
+
+--========================================================
+-- HARVEST — finds your plot, harvests ripe fruit first, then
+-- attempts still-growing ones too.
+--========================================================
+-- Finding your plot.
+--
+-- This previously did WaitForChild("Gardens") with no timeout and
+-- stopped searching once it found a plot. Both broke on other worlds:
+-- a world without a folder literally named "Gardens" made it yield
+-- forever (killing harvest AND random-mode planting with no error),
+-- and travelling to another world left it pointing at the old world's
+-- plot because the search had already exited.
+--
+-- Now it scans any Workspace container for a plot attributed to you,
+-- and keeps re-checking so world travel is picked up.
+local OwnerPlot = nil
+
+local function findOwnerPlot()
+	local myName = Players.LocalPlayer.Name
+	for _, container in ipairs(Workspace:GetChildren()) do
+		if container:IsA("Folder") or container:IsA("Model") then
+			local ok, children = pcall(function() return container:GetChildren() end)
+			if ok then
+				for _, plot in ipairs(children) do
+					if plot:GetAttribute("Owner") == myName then
+						return plot
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+task.spawn(function()
+	while true do
+		-- Re-resolve if we've never found one, or if the one we had has
+		-- been unparented (which is what happens on world travel).
+		if not OwnerPlot or not OwnerPlot.Parent then
+			OwnerPlot = findOwnerPlot()
+		end
+		task.wait(OwnerPlot and 2 or 0.25)
+	end
+end)
+
+local function isGrown(plant)
+	local maxAge = plant:GetAttribute("MaxAge")
+	local currentAge = plant:GetAttribute("Age")
+	if maxAge == nil or currentAge == nil then return false end
+	return currentAge >= maxAge
+end
+
+-- Crops you never want picked. Keyed by the shop seed name the Harvest
+-- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
+-- matching is loose in the same way planting's is.
+local HarvestExcluded = {}
+local HarvestSkipped = 0 -- plants left alone by the exclusion list
+
+-- What a plant "is" isn't reliably its instance name: plots often name
+-- children by id and keep the crop type in an attribute. Matching only
+-- on .Name meant exclusions silently never fired, so every plausible
+-- identifying field is checked.
+local function plantNames(plant)
+	-- SeedName is where this game keeps the crop ("Strawberry"), matching
+	-- the shop names the exclusion list shows. Everything else is a
+	-- fallback for other worlds.
+	local names = {}
+	local seedName = plant:GetAttribute("SeedName")
+	if type(seedName) == "string" and seedName ~= "" then
+		table.insert(names, seedName)
+	end
+	table.insert(names, plant.Name)
+	local ok, attrs = pcall(function() return plant:GetAttributes() end)
+	if ok and attrs then
+		for key, value in pairs(attrs) do
+			if type(value) == "string" and value ~= "" then
+				local k = tostring(key):lower()
+				-- PlantId is a guid and PlantType is the literal word
+				-- "Plant"; neither identifies a crop.
+				local useless = k == "plantid" or k == "planttype" or k == "userid"
+				if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop")) then
+					table.insert(names, value)
+				end
+			end
+		end
+	end
+	return names
+end
+
+local function isHarvestExcluded(plant)
+	-- Accepts an Instance or a plain string, since fruits are checked
+	-- by name too.
+	local names = typeof(plant) == "Instance" and plantNames(plant) or { tostring(plant) }
+	for seedName, on in pairs(HarvestExcluded) do
+		if on then
+			local wanted = seedName:lower()
+			for _, candidate in ipairs(names) do
+				local name = tostring(candidate):lower()
+				if name == wanted or name:find(wanted, 1, true) then return true end
+			end
+		end
+	end
+	return false
+end
+
+local function getHarvestTargets()
+	local targets = {}
+	local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+	if not plantsFolder then return targets end
+
+	for _, plant in pairs(plantsFolder:GetChildren()) do
+		if isHarvestExcluded(plant) then
+			HarvestSkipped += 1
+			continue
+		end
+		local fruitsFolder = plant:FindFirstChild("Fruits")
+		if fruitsFolder then
+			for _, fruit in pairs(fruitsFolder:GetChildren()) do
+				-- Fruits are checked as well: on some plots the crop
+				-- type shows up on the fruit rather than its parent.
+				if fruit:IsA("Model") and not isHarvestExcluded(fruit) then
+					table.insert(targets, fruit)
+				end
+			end
+		elseif plant:IsA("Model") then
+			table.insert(targets, plant)
+		end
+	end
+
+	return targets
+end
+
+
+local function harvestOne(target)
+	local id = target:GetAttribute("PlantId")
+	local fruitId = target:GetAttribute("FruitId") or ""
+	if id then
+		CollectFruit:Fire(id, fruitId)
+	end
+end
+
+local HarvestEnabled = false
+local HarvestInterval = 0.5
+
+task.spawn(function()
+	-- Ripe first, still-growing after — as two passes rather than a sort.
+	-- table.sort calls the comparator O(n log n) times and each call read
+	-- two attributes off both plants; on a large garden that alone was
+	-- tens of thousands of property reads per scan.
+	local function orderHarvestTargets(targets)
+		local ripe, growing = {}, {}
+		for _, target in ipairs(targets) do
+			if isGrown(target) then
+				table.insert(ripe, target)
+			else
+				table.insert(growing, target)
+			end
+		end
+		for _, target in ipairs(growing) do
+			table.insert(ripe, target)
+		end
+		return ripe
+	end
+
+	-- Two separate costs on a big garden, both fixed here.
+	--
+	-- Scanning: walking every plant and fruit is far too expensive to
+	-- redo every tick, so a scan is reused for a second.
+	--
+	-- Firing: the loop used to send a harvest request for EVERY fruit on
+	-- the plot on EVERY tick. With thousands of plants at a 0.001s delay
+	-- that is millions of remote calls a minute — the script flooding
+	-- itself. It now works through the list a slice at a time, picking
+	-- up where it left off, so a huge garden costs the same per tick as
+	-- a small one and simply takes more ticks to come round again.
+	local BATCH = 40
+	local cachedTargets, cachedAt, cursor = {}, 0, 1
+
+	while task.wait(HarvestInterval) do
+		if Shovel.stopped then return end
+		if HarvestEnabled and OwnerPlot then
+			if tick() - cachedAt > 1 then
+				cachedTargets = orderHarvestTargets(getHarvestTargets())
+				cachedAt = tick()
+				cursor = 1
+			end
+
+			local count = #cachedTargets
+			if count > 0 then
+				for _ = 1, math.min(BATCH, count) do
+					local target = cachedTargets[cursor]
+					if target and target.Parent then
+						harvestOne(target)
+					end
+					cursor += 1
+					if cursor > count then cursor = 1 end
+				end
+			end
+		end
+	end
+end)
+
+--========================================================
+-- PLANT — fires Networking.Plant.PlantSeed for each selected seed.
+--
+-- The remote's argument ORDER isn't discoverable from the module dump
+-- (its Writes serializers are opaque), and guessing wrong would fail
+-- silently. So instead of hardcoding a guess, the first plant attempt
+-- tries position-first, and if that errors, seed-name-first — then
+-- remembers whichever succeeded for the rest of the session. The
+-- game's typed serializers reject mismatched argument types, which is
+-- what makes this detectable rather than a coin flip.
+--========================================================
+local PlantEnabled = false
+local PlantInterval = 0.5
+local PlantSelected = {} -- seed name -> true
+
 
 do
 	local Pets = Shovel.pets

@@ -34,57 +34,76 @@ else
 		return part and part.Position or nil
 	end
 
-	-- Every model near you, whether or not it looks like anything.
-	local found = {}
+	-- Every model carrying a PetID, anywhere in the world — not just
+	-- nearby. This is what the buy loop looks for, so if a pet you can
+	-- see isn't in here, the marker is the problem.
+	local function attrs(inst)
+		local ok, list = pcall(function() return inst:GetAttributes() end)
+		return ok and list or {}
+	end
+
+	local function positionOf(model)
+		local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+		return part and part.Position or nil
+	end
+
+	local withId, byDistance = {}, {}
+
 	for _, inst in ipairs(Workspace:GetDescendants()) do
-		if inst:IsA("Model") and inst ~= character then
+		if inst:IsA("Model") and inst:FindFirstAncestor("Gardens") == nil then
+			local id, owner = nil, nil
+			for key, value in pairs(attrs(inst)) do
+				local k = tostring(key):lower()
+				if k == "petid" then id = value end
+				if k == "owner" then owner = value end
+			end
+
 			local position = positionOf(inst)
-			if position then
-				local distance = (position - origin).Magnitude
-				if distance <= 120 then
-					table.insert(found, { model = inst, distance = distance })
-				end
+			local distance = position and (position - origin).Magnitude or nil
+
+			if id then
+				table.insert(withId, {
+					model = inst,
+					owner = owner,
+					distance = distance or 9999,
+				})
+			elseif distance and distance <= 150 then
+				-- No PetID but standing near you: a pet that isn't
+				-- marked until someone owns it would look like this.
+				table.insert(byDistance, { model = inst, distance = distance })
 			end
 		end
 	end
 
-	table.sort(found, function(a, b) return a.distance < b.distance end)
+	table.sort(withId, function(a, b) return a.distance < b.distance end)
+	table.sort(byDistance, function(a, b) return a.distance < b.distance end)
 
-	add(#found .. " model(s) within 120 studs. Nearest 25:", "good")
+	add(#withId .. " model(s) carry a PetID:", #withId > 0 and "good" or "bad")
+	for index = 1, math.min(30, #withId) do
+		local entry = withId[index]
+		add(string.format(
+			"  %.0f studs  %s  owner=%s",
+			entry.distance,
+			entry.model:GetFullName(),
+			tostring(entry.owner)
+		), "good")
+	end
 
-	for index = 1, math.min(25, #found) do
-		local entry = found[index]
-		local model = entry.model
-		local humanoid = model:FindFirstChildOfClass("Humanoid")
-
-		add("")
-		add(string.format("--- %.0f studs: %s ---", entry.distance, model.Name), "good")
-		add("  Path: " .. model:GetFullName())
-		add("  Humanoid: " .. (humanoid and "yes" or "no"), humanoid and "good" or "info")
-
-		local ok, attrs = pcall(function() return model:GetAttributes() end)
-		if ok and attrs then
-			local any = false
-			for key, value in pairs(attrs) do
-				any = true
-				add("  attr " .. tostring(key) .. " = " .. typeof(value) .. " " .. tostring(value))
-			end
-			if not any then add("  (no attributes)") end
+	add("")
+	add("Unmarked models within 150 studs (nearest 30):")
+	for index = 1, math.min(30, #byDistance) do
+		local entry = byDistance[index]
+		local extra = {}
+		for key, value in pairs(attrs(entry.model)) do
+			table.insert(extra, tostring(key) .. "=" .. tostring(value))
 		end
-
-		-- Prompts and dialogs are how you'd interact with it, so they
-		-- say a lot about what it is.
-		for _, child in ipairs(model:GetDescendants()) do
-			if child:IsA("ProximityPrompt") then
-				add(string.format(
-					"  prompt: action=%q object=%q",
-					tostring(child.ActionText),
-					tostring(child.ObjectText)
-				), "good")
-			elseif child:IsA("Dialog") then
-				add("  has a Dialog (shopkeeper)", "info")
-			end
-		end
+		table.sort(extra)
+		add(string.format(
+			"  %.0f studs  %s%s",
+			entry.distance,
+			entry.model:GetFullName(),
+			#extra > 0 and ("  [" .. table.concat(extra, ", ") .. "]") or ""
+		))
 	end
 end
 

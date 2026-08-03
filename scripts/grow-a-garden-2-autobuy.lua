@@ -364,6 +364,7 @@ local function runBuyLoop(stockFolder, remote, category)
 
 	task.spawn(function()
 		while task.wait(BuyInterval) do
+			if Shovel.stopped then return end
 			for _, item in ipairs(cached) do
 				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
 					BuyFiredCount += 1
@@ -562,6 +563,7 @@ task.spawn(function()
 	local cachedTargets, cachedAt, cursor = {}, 0, 1
 
 	while task.wait(HarvestInterval) do
+		if Shovel.stopped then return end
 		if HarvestEnabled and OwnerPlot then
 			if tick() - cachedAt > 1 then
 				cachedTargets = orderHarvestTargets(getHarvestTargets())
@@ -945,6 +947,7 @@ local PlantCurrentName = nil
 
 task.spawn(function()
 	while task.wait(PlantInterval) do
+		if Shovel.stopped then return end
 		-- Both features fight over the equipped tool: planting equips a
 		-- seed, shovelling equips the Shovel, and each undoes the other.
 		-- Shovelling yields nothing useful without its tool, and it has
@@ -1162,6 +1165,7 @@ do
 
 	task.spawn(function()
 		while task.wait(Shovel.interval) do
+			if Shovel.stopped then return end
 			if not Shovel.enabled then
 				Shovel.pending = 0
 				-- Say so plainly. "idle" left it ambiguous whether the
@@ -1474,6 +1478,7 @@ end
 task.spawn(function()
 	local wasEnabled = false
 	while task.wait(0.05) do
+		if Shovel.stopped then return end
 		-- Rising edge only: sweeping on every tick would re-queue the
 		-- whole map continuously.
 		if CollectEnabled and not wasEnabled then
@@ -1512,6 +1517,7 @@ local SellInterval = 0.5
 
 task.spawn(function()
 	while task.wait(SellInterval) do
+		if Shovel.stopped then return end
 		if SellEnabled then
 			SellAll:Fire()
 		end
@@ -1585,6 +1591,48 @@ title.TextSize = 14
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Active = true
 title.Parent = frame
+
+-- Closing for good. Everything this script does runs on loops that
+-- check Shovel.stopped, so setting it and destroying the GUIs leaves
+-- nothing behind — no teleports, no purchases, no heartbeat. Rerunning
+-- the loadstring is the only way back, which is what "permanently"
+-- should mean.
+do
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.AnchorPoint = Vector2.new(1, 0)
+	closeBtn.Position = UDim2.new(1, -14, 0, 10)
+	closeBtn.Size = UDim2.new(0, 22, 0, 22)
+	closeBtn.BackgroundTransparency = 1
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.Text = "×"
+	closeBtn.TextColor3 = Color3.fromRGB(255, 140, 140)
+	closeBtn.TextSize = 20
+	closeBtn.ZIndex = 3
+	closeBtn.Parent = frame
+
+	closeBtn.MouseButton1Click:Connect(function()
+		Shovel.stopped = true
+
+		-- Switched off as well as flagged: a loop mid-wait shouldn't get
+		-- one more tick of work in before it notices.
+		PlantEnabled = false
+		HarvestEnabled = false
+		SellEnabled = false
+		CollectEnabled = false
+		Shovel.enabled = false
+		Shovel.pets.enabled = false
+		Selected.Seeds = {}
+		Selected.Gears = {}
+		Selected.Crates = {}
+
+		for _, screen in ipairs(gui.Parent:GetChildren()) do
+			if screen:IsA("ScreenGui") and screen.Name:find("Scriptexer") then
+				pcall(function() screen:Destroy() end)
+			end
+		end
+		pcall(function() gui:Destroy() end)
+	end)
+end
 
 -- Drag support
 do
@@ -1938,6 +1986,7 @@ Shovel.pets = {
 	status = "off",
 	busy = false, -- buying or escorting; blocks starting another
 	selected = {}, -- pet name -> true; nothing ticked means "any"
+	stopped = false, -- set by the × button; every loop checks it
 	seen = 0, -- world objects carrying a ticked pet's name
 	rejected = nil, -- why the first such object wasn't targeted
 	names = {}, -- every pet in the game, for the picker
@@ -2273,6 +2322,7 @@ do
 
 	task.spawn(function()
 		while task.wait(0.25) do
+			if Shovel.stopped then return end
 			if not Pets.enabled then
 				Pets.status = "off"
 			elseif not VIM then
@@ -4103,7 +4153,7 @@ do
 	local codeLabel = Instance.new("TextLabel")
 	codeLabel.BackgroundTransparency = 1
 	codeLabel.AnchorPoint = Vector2.new(1, 0)
-	codeLabel.Position = UDim2.new(1, -16, 0, 12)
+	codeLabel.Position = UDim2.new(1, -42, 0, 12)
 	codeLabel.Size = UDim2.new(0, 150, 0, 18)
 	codeLabel.Font = Enum.Font.Code
 	codeLabel.Text = httpRequest and ("code: " .. Code) or "no HTTP"
@@ -4157,6 +4207,7 @@ do
 				-- 0.5s, so a switch flipped on the site lands almost
 				-- immediately rather than after a visible pause.
 				task.wait(0.5)
+				if Shovel.stopped then return end
 			end
 		end)
 

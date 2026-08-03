@@ -858,23 +858,83 @@ do
 	end
 end
 
-local function randomPlotPosition()
+-- Each crop gets its own patch of the plot instead of everything being
+-- scattered together: bamboo in one block, mushroom in another.
+--
+-- Wrapped in a do-block so its helper costs no top-level local: the main
+-- chunk is at Lua's 200-locals ceiling.
+--
+-- The plot is divided into a grid, and a seed's block is its position in
+-- the alphabetical list of ALL seeds in the shop — not just the ones
+-- you've ticked. Keying off the selection would move every crop's block
+-- the moment you ticked one more, and the seeds already in the ground
+-- would no longer line up with it.
+local randomPlotPosition
+do
+	local function seedBlock(seedName)
+	local names = {}
+	for _, item in ipairs(SeedsStock:GetChildren()) do
+		table.insert(names, item.Name)
+	end
+	table.sort(names)
+
+	local wanted = tostring(seedName):lower()
+	local index = nil
+	for position, name in ipairs(names) do
+		local lower = name:lower()
+		-- Loose, since a held tool is "Maple Corn" where the shop says
+		-- "Corn".
+		if lower == wanted or wanted:find(lower, 1, true) then
+			index = position
+			break
+		end
+	end
+	if not index then return nil end
+
+	local columns = math.ceil(math.sqrt(#names))
+	local rows = math.ceil(#names / columns)
+	local column = (index - 1) % columns
+	local row = math.floor((index - 1) / columns)
+	return column, row, columns, rows
+	end
+
+	function randomPlotPosition(seedName)
 	local ground = getPlotGround()
 	if not ground then return nil end
+
 	-- Inset from the edges so seeds don't land half off the plot.
-	local offsetX = (math.random() * 2 - 1) * (ground.Size.X / 2) * 0.85
-	local offsetZ = (math.random() * 2 - 1) * (ground.Size.Z / 2) * 0.85
+	local spanX = ground.Size.X * 0.9
+	local spanZ = ground.Size.Z * 0.9
+
+	local offsetX, offsetZ
+	local column, row, columns, rows = seedBlock(seedName)
+
+	if column then
+		local cellX = spanX / columns
+		local cellZ = spanZ / rows
+		-- A small margin inside each cell keeps neighbouring crops from
+		-- bleeding into each other at the seams.
+		local left = -spanX / 2 + column * cellX
+		local top = -spanZ / 2 + row * cellZ
+		offsetX = left + cellX * (0.1 + math.random() * 0.8)
+		offsetZ = top + cellZ * (0.1 + math.random() * 0.8)
+	else
+		offsetX = (math.random() * 2 - 1) * (spanX / 2)
+		offsetZ = (math.random() * 2 - 1) * (spanZ / 2)
+	end
+
 	-- Go through the part's own CFrame so a rotated plot still works.
 	local spot = ground.CFrame * CFrame.new(offsetX, 0, offsetZ)
 	local topY = ground.Position.Y + (ground.Size.Y / 2)
 	return Vector3.new(spot.Position.X, topY, spot.Position.Z)
+	end
 end
 
-local function getPlantPosition()
+local function getPlantPosition(seedName)
 	if PlantMode == "fixed" then
 		return PlantFixedPosition
 	elseif PlantMode == "random" then
-		return randomPlotPosition()
+		return randomPlotPosition(seedName)
 	end
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -962,7 +1022,7 @@ task.spawn(function()
 					PlantCurrentSince = tick()
 				end
 
-				local position = getPlantPosition()
+				local position = getPlantPosition(tool.Name)
 				if position then
 					if firePlant(tool.Name, position) then
 						PlantFiredCount += 1
@@ -2361,6 +2421,19 @@ paintPlantModes()
 RemoteRepaint.plantMode = function(mode)
 	PlantMode = mode
 	paintPlantModes()
+end
+
+do
+	local modeNote = Instance.new("TextLabel")
+	modeNote.BackgroundTransparency = 1
+	modeNote.Position = UDim2.new(0, 16, 0, 102)
+	modeNote.Size = UDim2.new(1, -32, 0, 14)
+	modeNote.Font = Enum.Font.Gotham
+	modeNote.Text = "Random gives each crop its own block of the plot."
+	modeNote.TextColor3 = Color3.fromRGB(150, 150, 155)
+	modeNote.TextSize = 10
+	modeNote.TextXAlignment = Enum.TextXAlignment.Left
+	modeNote.Parent = plantPage
 end
 
 -- Pins the fixed-mode spot to wherever you're standing right now.

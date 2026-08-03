@@ -2401,9 +2401,18 @@ do
 			elseif Pets.enabled and #queue > 0 then
 				local entry = table.remove(queue, 1)
 				local model = entry.model
+				-- One pet you can't afford would otherwise be retried as
+				-- fast as the loop runs.
+				if entry.lastTry and tick() - entry.lastTry < 1 then
+					table.insert(queue, entry)
+					task.wait(0.25)
+					entry = nil
+					model = nil
+				end
 
 				-- Still there, still unowned.
-				if model.Parent and petNameOf(model) then
+				if model and model.Parent and petNameOf(model) then
+					entry.lastTry = tick()
 					local position = positionOf(model)
 					if position then
 						Pets.status = "going to " .. entry.name
@@ -2424,14 +2433,15 @@ do
 						local after = getCurrentSheckles()
 
 						if before and after and after >= before then
-							-- Usually "can't afford it yet": put it back
-							-- rather than dropping it.
-							Pets.status = entry.name .. " — Sheckles didn't change, requeued"
-							task.delay(15, function()
-								if Pets.enabled and model.Parent and not queued(model) then
-									table.insert(queue, entry)
-								end
-							end)
+							-- Couldn't afford it. Straight back on the
+							-- end of the queue and keep trying: waiting
+							-- fifteen seconds meant a pet could despawn
+							-- while sitting on a timer, and Sheckles are
+							-- coming in the whole time anyway. Going to
+							-- the end rather than the front lets the
+							-- other pets have a turn first.
+							Pets.status = entry.name .. " — not enough Sheckles, retrying"
+							table.insert(queue, entry)
 						else
 							Pets.bought += 1
 							escort(model, entry.name)

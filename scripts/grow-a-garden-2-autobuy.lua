@@ -1938,6 +1938,8 @@ Shovel.pets = {
 	status = "off",
 	busy = false, -- buying or escorting; blocks starting another
 	selected = {}, -- pet name -> true; nothing ticked means "any"
+	seen = 0, -- world objects carrying a ticked pet's name
+	rejected = nil, -- why the first such object wasn't targeted
 	names = {}, -- every pet in the game, for the picker
 	onMap = {}, -- the subset actually standing on the map right now
 	strict = false, -- true when real pet markers were found
@@ -2124,7 +2126,16 @@ do
 		for _, name in ipairs(Pets.names) do known[name] = true end
 
 		local pool = {}
+		-- Counted separately: anything in the world carrying a ticked
+		-- pet's name, before any filter runs. When the picker says a
+		-- pet is out there but nothing gets bought, this is what
+		-- distinguishes "never saw it" from "saw it and rejected it".
+		local sawNamed, rejected = 0, nil
+
 		for _, inst in ipairs(Workspace:GetDescendants()) do
+			local named = (inst:IsA("Model") or inst:IsA("BasePart")) and chosen(inst.Name)
+			if named then sawNamed += 1 end
+
 			if inst:IsA("Model") and not looksLikeVendor(inst) then
 				local id, owner = petIdOf(inst)
 				local mine = owner == myName
@@ -2132,9 +2143,19 @@ do
 
 				if not mine and not inGarden and (id or known[inst.Name]) then
 					table.insert(pool, inst)
+				elseif named and not rejected then
+					rejected = inst:GetFullName()
+						.. (mine and " (yours)" or "")
+						.. (inGarden and " (in a garden)" or "")
+						.. ((not id and not known[inst.Name]) and " (no PetID, not in catalogue)" or "")
 				end
+			elseif named and not rejected and not inst:IsA("Model") then
+				rejected = inst:GetFullName() .. " (" .. inst.ClassName .. ", not a Model)"
 			end
 		end
+
+		Pets.seen = sawNamed
+		Pets.rejected = rejected
 
 		Pets.strict = true
 
@@ -2263,9 +2284,15 @@ do
 			else
 				local models = petModels()
 				if #models == 0 then
-					Pets.status = #Pets.onMap > 0
-						and (#Pets.onMap .. " on the map, none ticked")
-						or "no pets on the map right now"
+					if Pets.rejected then
+						-- Something with the right name is standing
+						-- there and was filtered out; say which and why.
+						Pets.status = "skipped " .. Pets.rejected
+					elseif #Pets.onMap > 0 then
+						Pets.status = #Pets.onMap .. " on the map, none ticked"
+					else
+						Pets.status = "no pets on the map right now"
+					end
 				else
 					local model = models[1]
 					local position = positionOf(model)

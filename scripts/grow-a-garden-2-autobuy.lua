@@ -1583,7 +1583,7 @@ stroke.Parent = frame
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
 title.Position = UDim2.new(0, 16, 0, 12)
-title.Size = UDim2.new(1, -32, 0, 18)
+title.Size = UDim2.new(1, -180, 0, 18)
 title.Font = Enum.Font.GothamBold
 title.Text = "⚡ SCRIPTEXER"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1598,17 +1598,26 @@ title.Parent = frame
 -- the loadstring is the only way back, which is what "permanently"
 -- should mean.
 do
+	-- Hard against the panel's top-right corner, above everything else
+	-- on that row, with a filled pill behind it so it reads as a button
+	-- rather than a stray character next to the link code.
 	local closeBtn = Instance.new("TextButton")
 	closeBtn.AnchorPoint = Vector2.new(1, 0)
-	closeBtn.Position = UDim2.new(1, -14, 0, 10)
-	closeBtn.Size = UDim2.new(0, 22, 0, 22)
-	closeBtn.BackgroundTransparency = 1
+	closeBtn.Position = UDim2.new(1, -10, 0, 8)
+	closeBtn.Size = UDim2.new(0, 24, 0, 24)
+	closeBtn.BackgroundColor3 = Color3.fromRGB(60, 22, 26)
+	closeBtn.BackgroundTransparency = 0.15
+	closeBtn.AutoButtonColor = false
 	closeBtn.Font = Enum.Font.GothamBold
 	closeBtn.Text = "×"
-	closeBtn.TextColor3 = Color3.fromRGB(255, 140, 140)
-	closeBtn.TextSize = 20
-	closeBtn.ZIndex = 3
+	closeBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
+	closeBtn.TextSize = 18
+	closeBtn.ZIndex = 10
 	closeBtn.Parent = frame
+
+	local closeCorner = Instance.new("UICorner")
+	closeCorner.CornerRadius = UDim.new(1, 0)
+	closeCorner.Parent = closeBtn
 
 	closeBtn.MouseButton1Click:Connect(function()
 		Shovel.stopped = true
@@ -4153,7 +4162,7 @@ do
 	local codeLabel = Instance.new("TextLabel")
 	codeLabel.BackgroundTransparency = 1
 	codeLabel.AnchorPoint = Vector2.new(1, 0)
-	codeLabel.Position = UDim2.new(1, -42, 0, 12)
+	codeLabel.Position = UDim2.new(1, -44, 0, 12)
 	codeLabel.Size = UDim2.new(0, 150, 0, 18)
 	codeLabel.Font = Enum.Font.Code
 	codeLabel.Text = httpRequest and ("code: " .. Code) or "no HTTP"

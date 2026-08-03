@@ -1410,23 +1410,54 @@ local function triggerPrompt(prompt)
 	end
 end
 
+-- Keeps at it until the drop is genuinely gone.
+--
+-- One trigger and a hopeful "true" was wrong in both directions: a
+-- pickup that failed - out of range for a frame, prompt not ready, item
+-- still falling - counted as collected and was never retried, and the
+-- counter was really counting attempts rather than items.
+--
+-- The item disappearing is the only honest confirmation, so it teleports
+-- and triggers repeatedly until that happens or the deadline passes.
 local function collectDrop(prompt)
 	if not prompt or not prompt.Parent then return false end
 	local root = Drop.getRoot()
 	if not root then return false end
-	local position = promptPosition(prompt)
-	if not position then return false end
 
 	local origin = root.CFrame
-	root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
-	task.wait(CollectDwell)
-	triggerPrompt(prompt)
+	local deadline = tick() + 3
+	local collected = false
+
+	while tick() < deadline do
+		if not prompt.Parent then
+			collected = true
+			break
+		end
+
+		-- Re-read the position every pass: dropped items bounce and roll,
+		-- and teleporting to where it was is how a pickup misses.
+		local position = promptPosition(prompt)
+		if not position then break end
+
+		local rootNow = Drop.getRoot()
+		if not rootNow then break end
+		rootNow.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+
+		task.wait(CollectDwell)
+		triggerPrompt(prompt)
+		task.wait(0.05)
+
+		if not prompt.Parent then
+			collected = true
+			break
+		end
+	end
 
 	if CollectReturn then
 		local rootNow = Drop.getRoot()
 		if rootNow then rootNow.CFrame = origin end
 	end
-	return true
+	return collected
 end
 
 Workspace.DescendantAdded:Connect(function(inst)
@@ -1492,6 +1523,10 @@ task.spawn(function()
 			if ok and collected then
 				CollectedCount += 1
 				CollectLast = name
+			elseif target and target.Parent then
+				-- Still lying there: back on the queue rather than lost.
+				-- The end, so one stubborn item can't block the rest.
+				table.insert(CollectPending, target)
 			end
 		elseif #CollectPending > 0 then
 			-- Disabled mid-queue; don't teleport to stale targets later.

@@ -2152,6 +2152,10 @@ do
 		return names
 	end
 
+	-- Exact, case-insensitive. This used to be a substring test, which
+	-- matched a ticked "Bee" against a plant named
+	-- "11297928402_85e3bcb9-bee5-4b6c-..." — every guid on the plot
+	-- looked like a pet, and the real one was buried under them.
 	local function chosen(name)
 		local anyTicked = false
 		for _, on in pairs(Pets.selected) do
@@ -2159,11 +2163,9 @@ do
 		end
 		if not anyTicked then return true end
 
-		local lower = name:lower()
+		local lower = tostring(name):lower()
 		for wanted, on in pairs(Pets.selected) do
-			if on and (wanted:lower() == lower or lower:find(wanted:lower(), 1, true)) then
-				return true
-			end
+			if on and wanted:lower() == lower then return true end
 		end
 		return false
 	end
@@ -2191,7 +2193,9 @@ do
 		local sawNamed, rejected = 0, nil
 
 		for _, inst in ipairs(Workspace:GetDescendants()) do
-			local named = (inst:IsA("Model") or inst:IsA("BasePart")) and chosen(inst.Name)
+			local named = (inst:IsA("Model") or inst:IsA("BasePart"))
+				and inst:FindFirstAncestor("Gardens") == nil
+				and chosen(inst.Name)
 			if named then sawNamed += 1 end
 
 			if inst:IsA("Model") and not looksLikeVendor(inst) then

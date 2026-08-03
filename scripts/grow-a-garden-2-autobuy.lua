@@ -2047,38 +2047,44 @@ do
 		return false
 	end
 
-	-- What a pet actually is, read off the game rather than guessed:
+	-- What a buyable pet actually is, read off the game:
 	--
-	--   Workspace._PetVisualClient.Models.Bunny
-	--     PetID     = "d12ec6d6-..."
-	--     Owner     = "Rayaanalternate"
-	--     OwnerSlot = "PetPart2"
+	--   Workspace.Map.WildPetSpawns.WildPet_Owl_WildPet_16345583-...
+	--     PetName = "Owl"
 	--
-	-- No Humanoid anywhere, which is why every earlier scan came back
-	-- empty: it required one. An Owner attribute naming you means the
-	-- pet is already yours — those are the ones following you around,
-	-- and buying them again is nonsense.
-	local function petIdOf(model)
+	-- It carries no PetID and no Humanoid — a PetID only appears once a
+	-- pet belongs to someone:
+	--
+	--   Workspace._PetVisualClient.Models.Owl
+	--     PetID = "3267da8d-...", Owner = "Rayaanalternate"
+	--
+	-- So PetID marks a pet that is already owned, which is the opposite
+	-- of what the buy loop wants. PetName is the marker to look for.
+	local function petNameOf(model)
 		local ok, attrs = pcall(function() return model:GetAttributes() end)
-		if not ok or not attrs then return nil, nil end
+		if not ok or not attrs then return nil end
 
-		local id, owner = nil, nil
+		local name, id, owner = nil, nil, nil
 		for key, value in pairs(attrs) do
 			local k = tostring(key):lower()
+			if k == "petname" and type(value) == "string" then name = value end
 			if k == "petid" then id = value end
 			if k == "owner" then owner = value end
 		end
-		return id, owner
+
+		-- Already someone's pet, not for sale.
+		if id or owner then return nil end
+		if name then return name end
+
+		-- No attribute, but sitting in the wild-pet spawner: fall back to
+		-- the name embedded in "WildPet_Owl_WildPet_<guid>".
+		if model:FindFirstAncestor("WildPetSpawns") then
+			local embedded = model.Name:match("^WildPet_([%a%d]+)_")
+			if embedded then return embedded end
+		end
+		return nil
 	end
 
-	-- Every pet the game knows about, not just the ones standing around
-	-- right now — otherwise you could only tick a pet that happened to
-	-- be spawned when you looked, which defeats the point of choosing in
-	-- advance.
-	--
-	-- Read from wherever the game keeps them: pet containers in
-	-- ReplicatedStorage, and any pet config module that returns a table
-	-- keyed by name.
 	-- A pet registry, not everything with "pet" in its name. The loose
 	-- version swept up items and attribute names, so both sources are
 	-- now required to look like real pet records.
@@ -2177,65 +2183,40 @@ do
 	-- guess that was wrong in both directions: too strict found nothing,
 	-- too loose walked into NPCs.
 	local function petModels()
-		local myName = Players.LocalPlayer.Name
-
-		-- Names from the catalogue, so a pet for sale is recognised even
-		-- if it carries no PetID until someone owns it. That's the gap
-		-- that left nothing to teleport to.
-		local known = {}
-		for _, name in ipairs(Pets.names) do known[name] = true end
-
 		local pool = {}
-		-- Counted separately: anything in the world carrying a ticked
-		-- pet's name, before any filter runs. When the picker says a
-		-- pet is out there but nothing gets bought, this is what
-		-- distinguishes "never saw it" from "saw it and rejected it".
 		local sawNamed, rejected = 0, nil
 
 		for _, inst in ipairs(Workspace:GetDescendants()) do
-			local named = (inst:IsA("Model") or inst:IsA("BasePart"))
-				and inst:FindFirstAncestor("Gardens") == nil
-				and chosen(inst.Name)
-			if named then sawNamed += 1 end
-
-			if inst:IsA("Model") and not looksLikeVendor(inst) then
-				local id, owner = petIdOf(inst)
-				local mine = owner == myName
-				local inGarden = inst:FindFirstAncestor("Gardens") ~= nil
-
-				if not mine and not inGarden and (id or known[inst.Name]) then
-					table.insert(pool, inst)
-				elseif named and not rejected then
-					rejected = inst:GetFullName()
-						.. (mine and " (yours)" or "")
-						.. (inGarden and " (in a garden)" or "")
-						.. ((not id and not known[inst.Name]) and " (no PetID, not in catalogue)" or "")
+			if inst:IsA("Model") and inst:FindFirstAncestor("Gardens") == nil then
+				local petName = petNameOf(inst)
+				if petName then
+					if chosen(petName) then
+						sawNamed += 1
+						if owned[inst] then
+							if not rejected then rejected = petName .. " (already tried)" end
+						else
+							table.insert(pool, { model = inst, name = petName })
+						end
+					end
 				end
-			elseif named and not rejected and not inst:IsA("Model") then
-				rejected = inst:GetFullName() .. " (" .. inst.ClassName .. ", not a Model)"
 			end
 		end
 
+		Pets.strict = true
 		Pets.seen = sawNamed
 		Pets.rejected = rejected
 
-		Pets.strict = true
-
 		local seen, here = {}, {}
-		for _, model in ipairs(pool) do
-			if not seen[model.Name] then
-				seen[model.Name] = true
-				table.insert(here, model.Name)
+		for _, entry in ipairs(pool) do
+			if not seen[entry.name] then
+				seen[entry.name] = true
+				table.insert(here, entry.name)
 			end
 		end
 		table.sort(here)
 		Pets.onMap = here
 
-		local out = {}
-		for _, model in ipairs(pool) do
-			if not owned[model] and chosen(model.Name) then table.insert(out, model) end
-		end
-		return out
+		return pool
 	end
 
 	local function positionOf(model)
@@ -2357,11 +2338,12 @@ do
 						Pets.status = "no pets on the map right now"
 					end
 				else
-					local model = models[1]
+					local entry = models[1]
+					local model = entry.model
 					local position = positionOf(model)
 					if position then
 						Pets.busy = true
-						Pets.status = "going to " .. model.Name
+						Pets.status = "going to " .. entry.name
 						local root = Drop.getRoot()
 						local origin = root and root.CFrame
 						if root then

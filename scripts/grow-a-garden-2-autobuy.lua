@@ -1938,7 +1938,8 @@ Shovel.pets = {
 	status = "off",
 	busy = false, -- buying or escorting; blocks starting another
 	selected = {}, -- pet name -> true; nothing ticked means "any"
-	names = {}, -- what's on the map right now, for the picker
+	names = {}, -- every pet in the game, for the picker
+	onMap = {}, -- the subset actually standing on the map right now
 	strict = false, -- true when real pet markers were found
 }
 
@@ -2010,6 +2011,55 @@ do
 		return id, owner
 	end
 
+	-- Every pet the game knows about, not just the ones standing around
+	-- right now — otherwise you could only tick a pet that happened to
+	-- be spawned when you looked, which defeats the point of choosing in
+	-- advance.
+	--
+	-- Read from wherever the game keeps them: pet containers in
+	-- ReplicatedStorage, and any pet config module that returns a table
+	-- keyed by name.
+	local function catalogue()
+		local names = {}
+		local seen = {}
+
+		local function addName(name)
+			name = tostring(name)
+			if name ~= "" and not seen[name] then
+				seen[name] = true
+				table.insert(names, name)
+			end
+		end
+
+		local function scan(container)
+			for _, inst in ipairs(container:GetDescendants()) do
+				local lower = inst.Name:lower()
+
+				-- A folder of pet models: its children are pet names.
+				if (inst:IsA("Folder") or inst:IsA("Model")) and lower:find("pet") then
+					for _, child in ipairs(inst:GetChildren()) do
+						if child:IsA("Model") then addName(child.Name) end
+					end
+				end
+
+				-- A config module: keys are pet names.
+				if inst:IsA("ModuleScript") and lower:find("pet") then
+					local ok, data = pcall(require, inst)
+					if ok and type(data) == "table" then
+						for key, value in pairs(data) do
+							if type(key) == "string" and type(value) == "table" then
+								addName(key)
+							end
+						end
+					end
+				end
+			end
+		end
+
+		pcall(scan, ReplicatedStorage)
+		return names
+	end
+
 	local function chosen(name)
 		local anyTicked = false
 		for _, on in pairs(Pets.selected) do
@@ -2049,17 +2099,16 @@ do
 
 		Pets.strict = true
 
-		-- Publish everything found, ticked or not, so the picker shows
-		-- what's out there.
-		local seen, names = {}, {}
+		-- What's on the map right now, for the status line.
+		local seen, here = {}, {}
 		for _, model in ipairs(pool) do
 			if not seen[model.Name] then
 				seen[model.Name] = true
-				table.insert(names, model.Name)
+				table.insert(here, model.Name)
 			end
 		end
-		table.sort(names)
-		Pets.names = names
+		table.sort(here)
+		Pets.onMap = here
 
 		local out = {}
 		for _, model in ipairs(pool) do
@@ -2145,6 +2194,25 @@ do
 	end
 
 	task.spawn(function()
+		while true do
+			local found = catalogue()
+			-- Anything on the map that the catalogue missed still
+			-- belongs in the list.
+			local known = {}
+			for _, name in ipairs(found) do known[name] = true end
+			for _, name in ipairs(Pets.onMap) do
+				if not known[name] then
+					known[name] = true
+					table.insert(found, name)
+				end
+			end
+			table.sort(found)
+			Pets.names = found
+			task.wait(30)
+		end
+	end)
+
+	task.spawn(function()
 		while task.wait(0.25) do
 			if not Pets.enabled then
 				Pets.status = "off"
@@ -2157,9 +2225,9 @@ do
 			else
 				local models = petModels()
 				if #models == 0 then
-					Pets.status = #Pets.names > 0
-						and (#Pets.names .. " on the map, none ticked")
-						or "no pets found on the map"
+					Pets.status = #Pets.onMap > 0
+						and (#Pets.onMap .. " on the map, none ticked")
+						or "no pets on the map right now"
 				else
 					local model = models[1]
 					local position = positionOf(model)
@@ -3387,10 +3455,11 @@ do
 				rebuild()
 			end
 			note.Text = string.format(
-				"Bought: %d · %s%s",
+				"Bought: %d · %s · %d pet(s) known, %d on the map",
 				Shovel.pets.bought,
 				Shovel.pets.status,
-				Shovel.pets.strict and "" or " (loose matching)"
+				#Shovel.pets.names,
+				#Shovel.pets.onMap
 			)
 			note.TextColor3 = Shovel.pets.bought > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
 		end
@@ -3940,6 +4009,7 @@ do
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
 			mapPets = Shovel.pets.names,
+			petsOnMap = Shovel.pets.onMap,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than

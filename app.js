@@ -1162,7 +1162,9 @@ runScript(toRun)
 
   function hudPetsHtml(status) {
     const s = status || {};
-    return `<div class="hud-note ${(s.petsBought || 0) > 0 ? "good" : ""}">Bought: ${s.petsBought || 0} · ${escapeHtml(s.petsStatus || "off")}</div>`;
+    const known = (s.mapPets || []).length;
+    const here = (s.petsOnMap || []).length;
+    return `<div class="hud-note ${(s.petsBought || 0) > 0 ? "good" : ""}">Bought: ${s.petsBought || 0} · ${escapeHtml(s.petsStatus || "off")} · ${known} known, ${here} on the map</div>`;
   }
 
   function hudHtml(config, status, activeTab) {

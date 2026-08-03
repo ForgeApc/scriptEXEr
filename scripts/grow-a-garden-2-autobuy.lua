@@ -1993,13 +1993,11 @@ Shovel.pets = {
 	defend = 18, -- studs; someone closer than this gets hit
 	bought = 0,
 	status = "off",
-	busy = false, -- buying or escorting; blocks starting another
 	selected = {}, -- pet name -> true; nothing ticked means "any"
 	stopped = false, -- set by the × button; every loop checks it
-	seen = 0, -- world objects carrying a ticked pet's name
-	rejected = nil, -- why the first such object wasn't targeted
 	names = {}, -- every pet in the game, for the picker
 	onMap = {}, -- the subset actually standing on the map right now
+	seen = 0, -- how many are queued for buying right now
 	strict = false, -- true when real pet markers were found
 }
 
@@ -2185,43 +2183,69 @@ do
 	-- actually marked as pets?" decide the rule, rather than a fixed
 	-- guess that was wrong in both directions: too strict found nothing,
 	-- too loose walked into NPCs.
-	local function petModels()
-		local pool = {}
-		local sawNamed, rejected = 0, nil
+	-- Structured like the drop collector: sweep everything already out
+	-- there when you switch it on, watch for new spawns as they appear,
+	-- and work through a queue one at a time. The old version rescanned
+	-- every model in the world four times a second, which on this farm
+	-- is tens of thousands of instances per pass.
+	local queue = {}
 
+	local function queued(model)
+		for _, entry in ipairs(queue) do
+			if entry.model == model then return true end
+		end
+		return false
+	end
+
+	local function offer(inst)
+		if not inst:IsA("Model") then return end
+		if inst:FindFirstAncestor("Gardens") then return end
+
+		local petName = petNameOf(inst)
+		if not petName then return end
+		if not chosen(petName) then return end
+		if queued(inst) then return end
+
+		table.insert(queue, { model = inst, name = petName })
+	end
+
+	-- Everything already spawned. Sliced, same as the drop sweep.
+	local function sweep()
+		local scanned = 0
 		for _, inst in ipairs(Workspace:GetDescendants()) do
-			if inst:IsA("Model") and inst:FindFirstAncestor("Gardens") == nil then
-				local petName = petNameOf(inst)
-				if petName and chosen(petName) then
-					sawNamed += 1
-					local until_ = cooldown[inst]
-					if until_ and tick() < until_ then
-						if not rejected then
-							rejected = string.format("%s (retrying in %.0fs)", petName, until_ - tick())
-						end
-					else
-						table.insert(pool, { model = inst, name = petName })
-					end
+			if not Pets.enabled or Shovel.stopped then return end
+			offer(inst)
+			scanned += 1
+			if scanned % 2000 == 0 then task.wait() end
+		end
+	end
+
+	Workspace.DescendantAdded:Connect(function(inst)
+		if not Pets.enabled or Shovel.stopped then return end
+		-- A wild pet spawns as a model with its parts underneath, so the
+		-- attributes may not be set the instant it appears.
+		task.delay(0.2, function()
+			if inst.Parent then pcall(offer, inst) end
+		end)
+	end)
+
+	-- The picker and status still need to know what's out there, but
+	-- that's a slow, cheap question compared to driving the buy loop.
+	task.spawn(function()
+		while task.wait(2) do
+			if Shovel.stopped then return end
+			local seen, here = {}, {}
+			for _, entry in ipairs(queue) do
+				if entry.model.Parent and not seen[entry.name] then
+					seen[entry.name] = true
+					table.insert(here, entry.name)
 				end
 			end
+			table.sort(here)
+			Pets.onMap = here
+			Pets.seen = #queue
 		end
-
-		Pets.strict = true
-		Pets.seen = sawNamed
-		Pets.rejected = rejected
-
-		local seen, here = {}, {}
-		for _, entry in ipairs(pool) do
-			if not seen[entry.name] then
-				seen[entry.name] = true
-				table.insert(here, entry.name)
-			end
-		end
-		table.sort(here)
-		Pets.onMap = here
-
-		return pool
-	end
+	end)
 
 	local function positionOf(model)
 		if not model or not model.Parent then return nil end
@@ -2351,34 +2375,33 @@ do
 	end)
 
 	task.spawn(function()
-		while task.wait(0.25) do
+		local wasEnabled = false
+
+		while task.wait(0.05) do
 			if Shovel.stopped then return end
-			if not Pets.enabled then
+
+			-- Rising edge sweeps what is already out there, exactly like
+			-- the drop collector; disabling clears the queue so it can't
+			-- act on stale targets later.
+			if Pets.enabled and not wasEnabled then
+				wasEnabled = true
+				task.spawn(sweep)
+			elseif not Pets.enabled then
+				if wasEnabled then queue = {} end
+				wasEnabled = false
 				Pets.status = "off"
-			elseif not VIM then
+			end
+
+			if Pets.enabled and not VIM then
 				Pets.status = "this executor has no VirtualInputManager"
-			elseif Pets.busy then
-				-- One at a time: leaving a pet mid-walk to go buy
-				-- another is how you lose both.
-				task.wait(0.25)
-			else
-				local models = petModels()
-				if #models == 0 then
-					if Pets.rejected then
-						-- Something with the right name is standing
-						-- there and was filtered out; say which and why.
-						Pets.status = "skipped " .. Pets.rejected
-					elseif #Pets.onMap > 0 then
-						Pets.status = #Pets.onMap .. " on the map, none ticked"
-					else
-						Pets.status = "no pets on the map right now"
-					end
-				else
-					local entry = models[1]
-					local model = entry.model
+			elseif Pets.enabled and #queue > 0 then
+				local entry = table.remove(queue, 1)
+				local model = entry.model
+
+				-- Still there, still unowned.
+				if model.Parent and petNameOf(model) then
 					local position = positionOf(model)
 					if position then
-						Pets.busy = true
 						Pets.status = "going to " .. entry.name
 						local root = Drop.getRoot()
 						local origin = root and root.CFrame
@@ -2389,7 +2412,7 @@ do
 
 						Pets.status = "holding E to buy " .. entry.name
 						-- Nothing announces the sale, but it costs
-						-- Sheckles — so the balance falling is the
+						-- Sheckles, so the balance falling is the
 						-- confirmation.
 						local before = getCurrentSheckles()
 						holdE(1.2)
@@ -2397,10 +2420,14 @@ do
 						local after = getCurrentSheckles()
 
 						if before and after and after >= before then
-							-- Almost always "can't afford it yet", so try
-							-- again shortly rather than never.
-							cooldown[model] = tick() + 15
-							Pets.status = entry.name .. " — Sheckles didn't change, retrying"
+							-- Usually "can't afford it yet": put it back
+							-- rather than dropping it.
+							Pets.status = entry.name .. " — Sheckles didn't change, requeued"
+							task.delay(15, function()
+								if Pets.enabled and model.Parent and not queued(model) then
+									table.insert(queue, entry)
+								end
+							end)
 						else
 							Pets.bought += 1
 							escort(model, entry.name)
@@ -2408,9 +2435,12 @@ do
 
 						local rootNow = Drop.getRoot()
 						if rootNow and origin then rootNow.CFrame = origin end
-						Pets.busy = false
 					end
 				end
+			elseif Pets.enabled then
+				Pets.status = #Pets.onMap > 0
+					and (#Pets.onMap .. " on the map, none ticked")
+					or "waiting for a pet to spawn"
 			end
 		end
 	end)

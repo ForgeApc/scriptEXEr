@@ -874,16 +874,6 @@ runScript(toRun)
       list: "plant",
     },
     {
-      name: "Pets",
-      controls: [
-        { key: "petsEnabled", label: "Enable Auto Buy Pets", type: "toggle" },
-        { key: "petsFollow", label: "Follow delay", type: "slider", min: 0.01, max: 1, step: 0.01, unit: "s" },
-        { key: "petsDefend", label: "Defend within", type: "slider", min: 0, max: 60, step: 1, unit: " studs" },
-      ],
-      pets: true,
-      list: "pets",
-    },
-    {
       name: "Shovel",
       controls: [
         { key: "shovelEnabled", label: "Enable Auto Shovel", type: "toggle" },
@@ -1019,9 +1009,6 @@ runScript(toRun)
     if (kind === "shovel") {
       return ((status && status.gardenPlants) || []).map((name) => ({ name, category: "Garden" }));
     }
-    if (kind === "pets") {
-      return ((status && status.mapPets) || []).map((name) => ({ name, category: "Pets" }));
-    }
     // Plant, Drops and Harvest all list seeds.
     return (items.Seeds || []).map((it) => ({ name: it.name, category: "Seeds" }));
   }
@@ -1032,7 +1019,6 @@ runScript(toRun)
     if (kind === "drops") return new Set(sel.drops || []);
     if (kind === "harvest") return new Set(sel.harvestExcluded || []);
     if (kind === "shovel") return new Set(sel.shovel || []);
-    if (kind === "pets") return new Set(sel.pets || []);
     const cats = subTab === "All" ? ["Seeds", "Gears", "Crates"] : [subTab];
     const set = new Set();
     cats.forEach((cat) => (sel[cat] || []).forEach((n) => set.add(cat + "\u0000" + n)));
@@ -1049,8 +1035,6 @@ runScript(toRun)
       return `<div class="hud-note">${
         kind === "shovel"
           ? "Nothing growing on your plot yet."
-          : kind === "pets"
-          ? "No pets spotted on the map yet."
           : "Waiting for the script's item list…"
       }</div>`;
     }
@@ -1066,8 +1050,6 @@ runScript(toRun)
     const heading =
       kind === "harvest"
         ? `<div class="hud-note">Don't harvest these:</div>`
-        : kind === "pets"
-        ? `<div class="hud-note">Buy these pets (none ticked = any):</div>`
         : kind === "shovel"
         ? `<div class="hud-note">Dig up these crops:</div>`
         : "";
@@ -1160,13 +1142,6 @@ runScript(toRun)
     return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
   }
 
-  function hudPetsHtml(status) {
-    const s = status || {};
-    const known = (s.mapPets || []).length;
-    const here = (s.petsOnMap || []).length;
-    return `<div class="hud-note ${(s.petsBought || 0) > 0 ? "good" : ""}">Bought: ${s.petsBought || 0} · ${escapeHtml(s.petsStatus || "off")} · ${known} known, ${here} on the map</div>`;
-  }
-
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -1187,7 +1162,6 @@ runScript(toRun)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
               (tab.modes ? hudModesHtml(status) : "") +
               (tab.shovel ? hudShovelHtml(status) : "") +
-              (tab.pets ? hudPetsHtml(status) : "") +
               (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;
@@ -1255,7 +1229,7 @@ runScript(toRun)
     const sel = st.selected || {};
     // Settings are in here too: a switch flipped inside the game has to
     // show up on the site the same way a remote change does.
-    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, sel.harvestExcluded, sel.shovel, sel.pets, st.gardenPlants, st.mapPets, st.plantMode, st.settings]);
+    return JSON.stringify([sel.Seeds, sel.Gears, sel.Crates, sel.plant, sel.drops, sel.harvestExcluded, sel.shovel, st.gardenPlants, st.plantMode, st.settings]);
   }
 
   function paintHud(rebuild) {
@@ -1334,7 +1308,6 @@ runScript(toRun)
       collectItems: sel.drops,
       harvestExcluded: sel.harvestExcluded,
       shovelPlants: sel.shovel,
-      petsWanted: sel.pets,
     };
     Object.keys(confirmed).forEach((key) => {
       const pending = controlState.config[key];
@@ -1391,7 +1364,6 @@ runScript(toRun)
           collectItems: sel.drops || [],
           harvestExcluded: sel.harvestExcluded || [],
           shovelPlants: sel.shovel || [],
-          petsWanted: sel.pets || [],
         });
         await Presets.save(owner, name, config);
         if (input) input.value = "";
@@ -1460,8 +1432,6 @@ runScript(toRun)
         ? "plantSeeds"
         : kind === "harvest"
         ? "harvestExcluded"
-        : kind === "pets"
-        ? "petsWanted"
         : kind === "shovel"
         ? "shovelPlants"
         : "collectItems";
@@ -1477,8 +1447,6 @@ runScript(toRun)
           ? sel.plant
           : kind === "harvest"
           ? sel.harvestExcluded
-          : kind === "pets"
-          ? sel.pets
           : kind === "shovel"
           ? sel.shovel
           : sel.drops;

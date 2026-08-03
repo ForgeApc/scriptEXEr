@@ -323,10 +323,284 @@ end
 --========================================================
 local Selected = { Seeds = {}, Gears = {}, Crates = {} }
 
--- Declared at the very top, not down in the SHOVEL section. Loops far
--- above it read Shovel.stopped and Shovel.pending, and a local
--- declared later is a nil global to the code above it — which is
--- exactly how the buy loops died on their first tick.
+local function isSelected(category, name)
+	local v = Selected[category][name]
+	if v == nil then return false end -- default off until toggled
+	return v
+end
+
+local function countSelected()
+	local n = 0
+	for _, items in pairs(Selected) do
+		for _, on in pairs(items) do
+			if on then n += 1 end
+		end
+	end
+	return n
+end
+
+local BuyInterval = 0.5
+
+-- Live proof-of-activity state.
+local BuyFiredCount = 0 -- selected items that got a Fire() call
+local BuyLastFired = ""
+
+-- Fires the purchase remote for every selected item on every pass,
+-- unconditionally — regardless of stock status or whether you can
+-- currently afford it. The server decides whether the purchase goes
+-- through; this just keeps asking. (canAfford still exists and is
+-- used elsewhere, but is intentionally NOT checked here anymore.)
+local function runBuyLoop(stockFolder, remote, category)
+	-- The shop's contents barely change, but GetChildren allocates a
+	-- fresh table on every call — at a 0.001s interval across three
+	-- loops that is thousands of throwaway tables a second. Cache it and
+	-- refresh only when the folder actually changes.
+	local cached = stockFolder:GetChildren()
+	local function recache()
+		cached = stockFolder:GetChildren()
+	end
+	stockFolder.ChildAdded:Connect(recache)
+	stockFolder.ChildRemoved:Connect(recache)
+
+	task.spawn(function()
+		while task.wait(BuyInterval) do
+			for _, item in ipairs(cached) do
+				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
+					BuyFiredCount += 1
+					BuyLastFired = category .. " · " .. item.Name
+					-- No logging here. This runs once per selected item
+					-- per tick, and at a 0.001s interval with a full
+					-- selection that was tens of thousands of console
+					-- writes a second — a large source of the lag people
+					-- blamed on rendering. The Buy tab's counter already
+					-- shows the same information.
+					pcall(function()
+						remote:Fire(item.Name)
+					end)
+				end
+			end
+		end
+	end)
+end
+
+--========================================================
+-- HARVEST — finds your plot, harvests ripe fruit first, then
+-- attempts still-growing ones too.
+--========================================================
+-- Finding your plot.
+--
+-- This previously did WaitForChild("Gardens") with no timeout and
+-- stopped searching once it found a plot. Both broke on other worlds:
+-- a world without a folder literally named "Gardens" made it yield
+-- forever (killing harvest AND random-mode planting with no error),
+-- and travelling to another world left it pointing at the old world's
+-- plot because the search had already exited.
+--
+-- Now it scans any Workspace container for a plot attributed to you,
+-- and keeps re-checking so world travel is picked up.
+local OwnerPlot = nil
+
+local function findOwnerPlot()
+	local myName = Players.LocalPlayer.Name
+	for _, container in ipairs(Workspace:GetChildren()) do
+		if container:IsA("Folder") or container:IsA("Model") then
+			local ok, children = pcall(function() return container:GetChildren() end)
+			if ok then
+				for _, plot in ipairs(children) do
+					if plot:GetAttribute("Owner") == myName then
+						return plot
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+task.spawn(function()
+	while true do
+		-- Re-resolve if we've never found one, or if the one we had has
+		-- been unparented (which is what happens on world travel).
+		if not OwnerPlot or not OwnerPlot.Parent then
+			OwnerPlot = findOwnerPlot()
+		end
+		task.wait(OwnerPlot and 2 or 0.25)
+	end
+end)
+
+local function isGrown(plant)
+	local maxAge = plant:GetAttribute("MaxAge")
+	local currentAge = plant:GetAttribute("Age")
+	if maxAge == nil or currentAge == nil then return false end
+	return currentAge >= maxAge
+end
+
+-- Crops you never want picked. Keyed by the shop seed name the Harvest
+-- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
+-- matching is loose in the same way planting's is.
+local HarvestExcluded = {}
+local HarvestSkipped = 0 -- plants left alone by the exclusion list
+
+-- What a plant "is" isn't reliably its instance name: plots often name
+-- children by id and keep the crop type in an attribute. Matching only
+-- on .Name meant exclusions silently never fired, so every plausible
+-- identifying field is checked.
+local function plantNames(plant)
+	-- SeedName is where this game keeps the crop ("Strawberry"), matching
+	-- the shop names the exclusion list shows. Everything else is a
+	-- fallback for other worlds.
+	local names = {}
+	local seedName = plant:GetAttribute("SeedName")
+	if type(seedName) == "string" and seedName ~= "" then
+		table.insert(names, seedName)
+	end
+	table.insert(names, plant.Name)
+	local ok, attrs = pcall(function() return plant:GetAttributes() end)
+	if ok and attrs then
+		for key, value in pairs(attrs) do
+			if type(value) == "string" and value ~= "" then
+				local k = tostring(key):lower()
+				-- PlantId is a guid and PlantType is the literal word
+				-- "Plant"; neither identifies a crop.
+				local useless = k == "plantid" or k == "planttype" or k == "userid"
+				if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop")) then
+					table.insert(names, value)
+				end
+			end
+		end
+	end
+	return names
+end
+
+local function isHarvestExcluded(plant)
+	-- Accepts an Instance or a plain string, since fruits are checked
+	-- by name too.
+	local names = typeof(plant) == "Instance" and plantNames(plant) or { tostring(plant) }
+	for seedName, on in pairs(HarvestExcluded) do
+		if on then
+			local wanted = seedName:lower()
+			for _, candidate in ipairs(names) do
+				local name = tostring(candidate):lower()
+				if name == wanted or name:find(wanted, 1, true) then return true end
+			end
+		end
+	end
+	return false
+end
+
+local function getHarvestTargets()
+	local targets = {}
+	local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
+	if not plantsFolder then return targets end
+
+	for _, plant in pairs(plantsFolder:GetChildren()) do
+		if isHarvestExcluded(plant) then
+			HarvestSkipped += 1
+			continue
+		end
+		local fruitsFolder = plant:FindFirstChild("Fruits")
+		if fruitsFolder then
+			for _, fruit in pairs(fruitsFolder:GetChildren()) do
+				-- Fruits are checked as well: on some plots the crop
+				-- type shows up on the fruit rather than its parent.
+				if fruit:IsA("Model") and not isHarvestExcluded(fruit) then
+					table.insert(targets, fruit)
+				end
+			end
+		elseif plant:IsA("Model") then
+			table.insert(targets, plant)
+		end
+	end
+
+	return targets
+end
+
+
+local function harvestOne(target)
+	local id = target:GetAttribute("PlantId")
+	local fruitId = target:GetAttribute("FruitId") or ""
+	if id then
+		CollectFruit:Fire(id, fruitId)
+	end
+end
+
+local HarvestEnabled = false
+local HarvestInterval = 0.5
+
+task.spawn(function()
+	-- Ripe first, still-growing after — as two passes rather than a sort.
+	-- table.sort calls the comparator O(n log n) times and each call read
+	-- two attributes off both plants; on a large garden that alone was
+	-- tens of thousands of property reads per scan.
+	local function orderHarvestTargets(targets)
+		local ripe, growing = {}, {}
+		for _, target in ipairs(targets) do
+			if isGrown(target) then
+				table.insert(ripe, target)
+			else
+				table.insert(growing, target)
+			end
+		end
+		for _, target in ipairs(growing) do
+			table.insert(ripe, target)
+		end
+		return ripe
+	end
+
+	-- Two separate costs on a big garden, both fixed here.
+	--
+	-- Scanning: walking every plant and fruit is far too expensive to
+	-- redo every tick, so a scan is reused for a second.
+	--
+	-- Firing: the loop used to send a harvest request for EVERY fruit on
+	-- the plot on EVERY tick. With thousands of plants at a 0.001s delay
+	-- that is millions of remote calls a minute — the script flooding
+	-- itself. It now works through the list a slice at a time, picking
+	-- up where it left off, so a huge garden costs the same per tick as
+	-- a small one and simply takes more ticks to come round again.
+	local BATCH = 40
+	local cachedTargets, cachedAt, cursor = {}, 0, 1
+
+	while task.wait(HarvestInterval) do
+		if HarvestEnabled and OwnerPlot then
+			if tick() - cachedAt > 1 then
+				cachedTargets = orderHarvestTargets(getHarvestTargets())
+				cachedAt = tick()
+				cursor = 1
+			end
+
+			local count = #cachedTargets
+			if count > 0 then
+				for _ = 1, math.min(BATCH, count) do
+					local target = cachedTargets[cursor]
+					if target and target.Parent then
+						harvestOne(target)
+					end
+					cursor += 1
+					if cursor > count then cursor = 1 end
+				end
+			end
+		end
+	end
+end)
+
+--========================================================
+-- PLANT — fires Networking.Plant.PlantSeed for each selected seed.
+--
+-- The remote's argument ORDER isn't discoverable from the module dump
+-- (its Writes serializers are opaque), and guessing wrong would fail
+-- silently. So instead of hardcoding a guess, the first plant attempt
+-- tries position-first, and if that errors, seed-name-first — then
+-- remembers whichever succeeded for the rest of the session. The
+-- game's typed serializers reject mismatched argument types, which is
+-- what makes this detectable rather than a coin flip.
+--========================================================
+local PlantEnabled = false
+local PlantInterval = 0.5
+local PlantSelected = {} -- seed name -> true
+
+-- Declared up here, not down in the SHOVEL section, because the plant
+-- loop has to know whether shovelling wants the tool.
 local Shovel = {
 	enabled = false,
 	interval = 0.5,
@@ -671,7 +945,6 @@ local PlantCurrentName = nil
 
 task.spawn(function()
 	while task.wait(PlantInterval) do
-		if Shovel.stopped then return end
 		-- Both features fight over the equipped tool: planting equips a
 		-- seed, shovelling equips the Shovel, and each undoes the other.
 		-- Shovelling yields nothing useful without its tool, and it has
@@ -889,7 +1162,6 @@ do
 
 	task.spawn(function()
 		while task.wait(Shovel.interval) do
-			if Shovel.stopped then return end
 			if not Shovel.enabled then
 				Shovel.pending = 0
 				-- Say so plainly. "idle" left it ambiguous whether the
@@ -1088,10 +1360,6 @@ end
 -- already lying around can never disagree about what counts as loot.
 function Drop.isCollectable(prompt)
 	if Drop.isGarden(prompt) then return false end
-	-- Pets are Humanoid models you buy by holding E, and they look a lot
-	-- like loot sitting on the ground. Collecting must never be the
-	-- thing that spends your Sheckles — that's the Pets tab's job, where
-	-- you asked for it.
 	if Drop.isNpc(prompt) then return false end
 	-- A drop marker outranks the price test: a pet a player dropped is
 	-- loot even if its prompt still mentions a price.
@@ -1202,7 +1470,6 @@ end
 task.spawn(function()
 	local wasEnabled = false
 	while task.wait(0.05) do
-		if Shovel.stopped then return end
 		-- Rising edge only: sweeping on every tick would re-queue the
 		-- whole map continuously.
 		if CollectEnabled and not wasEnabled then
@@ -1241,7 +1508,6 @@ local SellInterval = 0.5
 
 task.spawn(function()
 	while task.wait(SellInterval) do
-		if Shovel.stopped then return end
 		if SellEnabled then
 			SellAll:Fire()
 		end
@@ -1280,7 +1546,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506, Pets = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -1307,7 +1573,7 @@ stroke.Parent = frame
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
 title.Position = UDim2.new(0, 16, 0, 12)
-title.Size = UDim2.new(1, -180, 0, 18)
+title.Size = UDim2.new(1, -32, 0, 18)
 title.Font = Enum.Font.GothamBold
 title.Text = "⚡ SCRIPTEXER"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1315,57 +1581,6 @@ title.TextSize = 14
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Active = true
 title.Parent = frame
-
--- Closing for good. Everything this script does runs on loops that
--- check Shovel.stopped, so setting it and destroying the GUIs leaves
--- nothing behind — no teleports, no purchases, no heartbeat. Rerunning
--- the loadstring is the only way back, which is what "permanently"
--- should mean.
-do
-	-- Hard against the panel's top-right corner, above everything else
-	-- on that row, with a filled pill behind it so it reads as a button
-	-- rather than a stray character next to the link code.
-	local closeBtn = Instance.new("TextButton")
-	closeBtn.AnchorPoint = Vector2.new(1, 0)
-	closeBtn.Position = UDim2.new(1, -10, 0, 8)
-	closeBtn.Size = UDim2.new(0, 24, 0, 24)
-	closeBtn.BackgroundColor3 = Color3.fromRGB(60, 22, 26)
-	closeBtn.BackgroundTransparency = 0.15
-	closeBtn.AutoButtonColor = false
-	closeBtn.Font = Enum.Font.GothamBold
-	closeBtn.Text = "×"
-	closeBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
-	closeBtn.TextSize = 18
-	closeBtn.ZIndex = 10
-	closeBtn.Parent = frame
-
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(1, 0)
-	closeCorner.Parent = closeBtn
-
-	closeBtn.MouseButton1Click:Connect(function()
-		Shovel.stopped = true
-
-		-- Switched off as well as flagged: a loop mid-wait shouldn't get
-		-- one more tick of work in before it notices.
-		PlantEnabled = false
-		HarvestEnabled = false
-		SellEnabled = false
-		CollectEnabled = false
-		Shovel.enabled = false
-		Shovel.pets.enabled = false
-		Selected.Seeds = {}
-		Selected.Gears = {}
-		Selected.Crates = {}
-
-		for _, screen in ipairs(gui.Parent:GetChildren()) do
-			if screen:IsA("ScreenGui") and screen.Name:find("Scriptexer") then
-				pcall(function() screen:Destroy() end)
-			end
-		end
-		pcall(function() gui:Destroy() end)
-	end)
-end
 
 -- Drag support
 do
@@ -1702,765 +1917,6 @@ local function createStatRow(parent, y, labelText)
 end
 
 --========================================================
--- PETS — buy the pets that spawn around the map, escort them home, and
--- fend off anyone who comes to take one.
---
--- These are the prompts the drop collector deliberately avoids, because
--- triggering one spends Sheckles. Here that's the point.
---========================================================
--- Hung off the Shovel table rather than a local of its own: the main
--- chunk is at Lua's 200-locals ceiling, and pet defence uses the shovel
--- anyway.
-Shovel.pets = {
-	enabled = false,
-	follow = 0.1, -- seconds between teleports while escorting
-	defend = 18, -- studs; someone closer than this gets hit
-	bought = 0,
-	status = "off",
-	selected = {}, -- pet name -> true; nothing ticked means "any"
-	stopped = false, -- set by the × button; every loop checks it
-	names = {}, -- every pet in the game, for the picker
-	onMap = {}, -- the subset actually standing on the map right now
-	seen = 0, -- how many are queued for buying right now
-	strict = false, -- true when real pet markers were found
-}
-
-
-local function isSelected(category, name)
-	local v = Selected[category][name]
-	if v == nil then return false end -- default off until toggled
-	return v
-end
-
-local function countSelected()
-	local n = 0
-	for _, items in pairs(Selected) do
-		for _, on in pairs(items) do
-			if on then n += 1 end
-		end
-	end
-	return n
-end
-
-local BuyInterval = 0.5
-
--- Live proof-of-activity state.
-local BuyFiredCount = 0 -- selected items that got a Fire() call
-local BuyLastFired = ""
-
--- Fires the purchase remote for every selected item on every pass,
--- unconditionally — regardless of stock status or whether you can
--- currently afford it. The server decides whether the purchase goes
--- through; this just keeps asking. (canAfford still exists and is
--- used elsewhere, but is intentionally NOT checked here anymore.)
-local function runBuyLoop(stockFolder, remote, category)
-	-- The shop's contents barely change, but GetChildren allocates a
-	-- fresh table on every call — at a 0.001s interval across three
-	-- loops that is thousands of throwaway tables a second. Cache it and
-	-- refresh only when the folder actually changes.
-	local cached = stockFolder:GetChildren()
-	local function recache()
-		cached = stockFolder:GetChildren()
-	end
-	stockFolder.ChildAdded:Connect(recache)
-	stockFolder.ChildRemoved:Connect(recache)
-
-	task.spawn(function()
-		while task.wait(BuyInterval) do
-			if Shovel.stopped then return end
-			for _, item in ipairs(cached) do
-				if item and typeof(item) == "Instance" and isSelected(category, item.Name) then
-					BuyFiredCount += 1
-					BuyLastFired = category .. " · " .. item.Name
-					-- No logging here. This runs once per selected item
-					-- per tick, and at a 0.001s interval with a full
-					-- selection that was tens of thousands of console
-					-- writes a second — a large source of the lag people
-					-- blamed on rendering. The Buy tab's counter already
-					-- shows the same information.
-					pcall(function()
-						remote:Fire(item.Name)
-					end)
-				end
-			end
-		end
-	end)
-end
-
---========================================================
--- HARVEST — finds your plot, harvests ripe fruit first, then
--- attempts still-growing ones too.
---========================================================
--- Finding your plot.
---
--- This previously did WaitForChild("Gardens") with no timeout and
--- stopped searching once it found a plot. Both broke on other worlds:
--- a world without a folder literally named "Gardens" made it yield
--- forever (killing harvest AND random-mode planting with no error),
--- and travelling to another world left it pointing at the old world's
--- plot because the search had already exited.
---
--- Now it scans any Workspace container for a plot attributed to you,
--- and keeps re-checking so world travel is picked up.
-local OwnerPlot = nil
-
-local function findOwnerPlot()
-	local myName = Players.LocalPlayer.Name
-	for _, container in ipairs(Workspace:GetChildren()) do
-		if container:IsA("Folder") or container:IsA("Model") then
-			local ok, children = pcall(function() return container:GetChildren() end)
-			if ok then
-				for _, plot in ipairs(children) do
-					if plot:GetAttribute("Owner") == myName then
-						return plot
-					end
-				end
-			end
-		end
-	end
-	return nil
-end
-
-task.spawn(function()
-	while true do
-		-- Re-resolve if we've never found one, or if the one we had has
-		-- been unparented (which is what happens on world travel).
-		if not OwnerPlot or not OwnerPlot.Parent then
-			OwnerPlot = findOwnerPlot()
-		end
-		task.wait(OwnerPlot and 2 or 0.25)
-	end
-end)
-
-local function isGrown(plant)
-	local maxAge = plant:GetAttribute("MaxAge")
-	local currentAge = plant:GetAttribute("Age")
-	if maxAge == nil or currentAge == nil then return false end
-	return currentAge >= maxAge
-end
-
--- Crops you never want picked. Keyed by the shop seed name the Harvest
--- tab lists; plot plants carry world-prefixed names ("Maple Corn"), so
--- matching is loose in the same way planting's is.
-local HarvestExcluded = {}
-local HarvestSkipped = 0 -- plants left alone by the exclusion list
-
--- What a plant "is" isn't reliably its instance name: plots often name
--- children by id and keep the crop type in an attribute. Matching only
--- on .Name meant exclusions silently never fired, so every plausible
--- identifying field is checked.
-local function plantNames(plant)
-	-- SeedName is where this game keeps the crop ("Strawberry"), matching
-	-- the shop names the exclusion list shows. Everything else is a
-	-- fallback for other worlds.
-	local names = {}
-	local seedName = plant:GetAttribute("SeedName")
-	if type(seedName) == "string" and seedName ~= "" then
-		table.insert(names, seedName)
-	end
-	table.insert(names, plant.Name)
-	local ok, attrs = pcall(function() return plant:GetAttributes() end)
-	if ok and attrs then
-		for key, value in pairs(attrs) do
-			if type(value) == "string" and value ~= "" then
-				local k = tostring(key):lower()
-				-- PlantId is a guid and PlantType is the literal word
-				-- "Plant"; neither identifies a crop.
-				local useless = k == "plantid" or k == "planttype" or k == "userid"
-				if not useless and (k:find("name") or k:find("type") or k:find("seed") or k:find("plant") or k:find("crop")) then
-					table.insert(names, value)
-				end
-			end
-		end
-	end
-	return names
-end
-
-local function isHarvestExcluded(plant)
-	-- Accepts an Instance or a plain string, since fruits are checked
-	-- by name too.
-	local names = typeof(plant) == "Instance" and plantNames(plant) or { tostring(plant) }
-	for seedName, on in pairs(HarvestExcluded) do
-		if on then
-			local wanted = seedName:lower()
-			for _, candidate in ipairs(names) do
-				local name = tostring(candidate):lower()
-				if name == wanted or name:find(wanted, 1, true) then return true end
-			end
-		end
-	end
-	return false
-end
-
-local function getHarvestTargets()
-	local targets = {}
-	local plantsFolder = OwnerPlot and OwnerPlot:FindFirstChild("Plants")
-	if not plantsFolder then return targets end
-
-	for _, plant in pairs(plantsFolder:GetChildren()) do
-		if isHarvestExcluded(plant) then
-			HarvestSkipped += 1
-			continue
-		end
-		local fruitsFolder = plant:FindFirstChild("Fruits")
-		if fruitsFolder then
-			for _, fruit in pairs(fruitsFolder:GetChildren()) do
-				-- Fruits are checked as well: on some plots the crop
-				-- type shows up on the fruit rather than its parent.
-				if fruit:IsA("Model") and not isHarvestExcluded(fruit) then
-					table.insert(targets, fruit)
-				end
-			end
-		elseif plant:IsA("Model") then
-			table.insert(targets, plant)
-		end
-	end
-
-	return targets
-end
-
-
-local function harvestOne(target)
-	local id = target:GetAttribute("PlantId")
-	local fruitId = target:GetAttribute("FruitId") or ""
-	if id then
-		CollectFruit:Fire(id, fruitId)
-	end
-end
-
-local HarvestEnabled = false
-local HarvestInterval = 0.5
-
-task.spawn(function()
-	-- Ripe first, still-growing after — as two passes rather than a sort.
-	-- table.sort calls the comparator O(n log n) times and each call read
-	-- two attributes off both plants; on a large garden that alone was
-	-- tens of thousands of property reads per scan.
-	local function orderHarvestTargets(targets)
-		local ripe, growing = {}, {}
-		for _, target in ipairs(targets) do
-			if isGrown(target) then
-				table.insert(ripe, target)
-			else
-				table.insert(growing, target)
-			end
-		end
-		for _, target in ipairs(growing) do
-			table.insert(ripe, target)
-		end
-		return ripe
-	end
-
-	-- Two separate costs on a big garden, both fixed here.
-	--
-	-- Scanning: walking every plant and fruit is far too expensive to
-	-- redo every tick, so a scan is reused for a second.
-	--
-	-- Firing: the loop used to send a harvest request for EVERY fruit on
-	-- the plot on EVERY tick. With thousands of plants at a 0.001s delay
-	-- that is millions of remote calls a minute — the script flooding
-	-- itself. It now works through the list a slice at a time, picking
-	-- up where it left off, so a huge garden costs the same per tick as
-	-- a small one and simply takes more ticks to come round again.
-	local BATCH = 40
-	local cachedTargets, cachedAt, cursor = {}, 0, 1
-
-	while task.wait(HarvestInterval) do
-		if Shovel.stopped then return end
-		if HarvestEnabled and OwnerPlot then
-			if tick() - cachedAt > 1 then
-				cachedTargets = orderHarvestTargets(getHarvestTargets())
-				cachedAt = tick()
-				cursor = 1
-			end
-
-			local count = #cachedTargets
-			if count > 0 then
-				for _ = 1, math.min(BATCH, count) do
-					local target = cachedTargets[cursor]
-					if target and target.Parent then
-						harvestOne(target)
-					end
-					cursor += 1
-					if cursor > count then cursor = 1 end
-				end
-			end
-		end
-	end
-end)
-
---========================================================
--- PLANT — fires Networking.Plant.PlantSeed for each selected seed.
---
--- The remote's argument ORDER isn't discoverable from the module dump
--- (its Writes serializers are opaque), and guessing wrong would fail
--- silently. So instead of hardcoding a guess, the first plant attempt
--- tries position-first, and if that errors, seed-name-first — then
--- remembers whichever succeeded for the rest of the session. The
--- game's typed serializers reject mismatched argument types, which is
--- what makes this detectable rather than a coin flip.
---========================================================
-local PlantEnabled = false
-local PlantInterval = 0.5
-local PlantSelected = {} -- seed name -> true
-
-
-do
-	local Pets = Shovel.pets
-	local VIM = nil
-	pcall(function() VIM = game:GetService("VirtualInputManager") end)
-
-	-- There is no prompt on these pets: you stand near one and hold E,
-	-- and the game charges you. So the purchase is a real key press,
-	-- driven through VirtualInputManager, rather than a remote we could
-	-- fire directly.
-	local function holdE(seconds)
-		if not VIM then return false end
-		local ok = pcall(function()
-			VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-		end)
-		if not ok then return false end
-		task.wait(seconds)
-		pcall(function()
-			VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-		end)
-		return true
-	end
-
-	-- NPCs are Humanoid models too, which is exactly why it kept walking
-	-- to them. Names, dialogue and shop prompts are what separate a
-	-- shopkeeper from a pet.
-	local NPC_WORDS = { "npc", "vendor", "merchant", "shop", "seller", "trader", "guide", "keeper", "clerk" }
-
-	local function looksLikeVendor(model)
-		local name = model.Name:lower()
-		for _, word in ipairs(NPC_WORDS) do
-			if name:find(word) then return true end
-		end
-		for _, child in ipairs(model:GetDescendants()) do
-			if child:IsA("Dialog") then return true end
-			if child:IsA("ProximityPrompt") then
-				local text = ((child.ActionText or "") .. " " .. (child.ObjectText or "")):lower()
-				if text:find("shop") or text:find("sell") or text:find("talk") or text:find("open") then
-					return true
-				end
-			end
-		end
-		return false
-	end
-
-	-- What a buyable pet actually is, read off the game:
-	--
-	--   Workspace.Map.WildPetSpawns.WildPet_Owl_WildPet_16345583-...
-	--     PetName = "Owl"
-	--
-	-- It carries no PetID and no Humanoid — a PetID only appears once a
-	-- pet belongs to someone:
-	--
-	--   Workspace._PetVisualClient.Models.Owl
-	--     PetID = "3267da8d-...", Owner = "Rayaanalternate"
-	--
-	-- So PetID marks a pet that is already owned, which is the opposite
-	-- of what the buy loop wants. PetName is the marker to look for.
-	local function petNameOf(model)
-		local ok, attrs = pcall(function() return model:GetAttributes() end)
-		if not ok or not attrs then return nil end
-
-		local name, id, owner = nil, nil, nil
-		for key, value in pairs(attrs) do
-			local k = tostring(key):lower()
-			if k == "petname" and type(value) == "string" then name = value end
-			if k == "petid" then id = value end
-			if k == "owner" then owner = value end
-		end
-
-		-- Already someone's pet, not for sale.
-		if id or owner then return nil end
-		if name then return name end
-
-		-- No attribute, but sitting in the wild-pet spawner: fall back to
-		-- the name embedded in "WildPet_Owl_WildPet_<guid>".
-		if model:FindFirstAncestor("WildPetSpawns") then
-			local embedded = model.Name:match("^WildPet_([%a%d]+)_")
-			if embedded then return embedded end
-		end
-		return nil
-	end
-
-	-- A pet registry, not everything with "pet" in its name. The loose
-	-- version swept up items and attribute names, so both sources are
-	-- now required to look like real pet records.
-	local PET_CONTAINERS = { "pets", "petmodels", "petassets" }
-
-	local function isPetContainer(name)
-		local lower = name:lower()
-		for _, wanted in ipairs(PET_CONTAINERS) do
-			if lower == wanted then return true end
-		end
-		return false
-	end
-
-	-- A pet's config entry describes a creature: it has a rarity, a
-	-- price, a model, or a hatch chance. A random settings table keyed by
-	-- string does not.
-	local function looksLikePetRecord(record)
-		if type(record) ~= "table" then return false end
-		for key in pairs(record) do
-			local k = tostring(key):lower()
-			if
-				k:find("rarity")
-				or k:find("price")
-				or k:find("cost")
-				or k:find("chance")
-				or k:find("model")
-				or k:find("passive")
-				or k:find("ability")
-			then
-				return true
-			end
-		end
-		return false
-	end
-
-	local function catalogue()
-		local names = {}
-		local seen = {}
-
-		local function addName(name)
-			name = tostring(name)
-			-- Attribute-ish and id-ish strings are not pet names.
-			if name == "" or seen[name] then return end
-			if name:find("%-") and #name >= 16 then return end
-			seen[name] = true
-			table.insert(names, name)
-		end
-
-		local function scan(container)
-			for _, inst in ipairs(container:GetDescendants()) do
-				if (inst:IsA("Folder") or inst:IsA("Model")) and isPetContainer(inst.Name) then
-					for _, child in ipairs(inst:GetChildren()) do
-						if child:IsA("Model") then addName(child.Name) end
-					end
-				end
-
-				if inst:IsA("ModuleScript") and inst.Name:lower():find("pet") then
-					local ok, data = pcall(require, inst)
-					if ok and type(data) == "table" then
-						for key, value in pairs(data) do
-							if type(key) == "string" and looksLikePetRecord(value) then
-								addName(key)
-							end
-						end
-					end
-				end
-			end
-		end
-
-		pcall(scan, ReplicatedStorage)
-		return names
-	end
-
-	-- Exact, case-insensitive. This used to be a substring test, which
-	-- matched a ticked "Bee" against a plant named
-	-- "11297928402_85e3bcb9-bee5-4b6c-..." — every guid on the plot
-	-- looked like a pet, and the real one was buried under them.
-	local function chosen(name)
-		local anyTicked = false
-		for _, on in pairs(Pets.selected) do
-			if on then anyTicked = true break end
-		end
-		if not anyTicked then return true end
-
-		local lower = tostring(name):lower()
-		for wanted, on in pairs(Pets.selected) do
-			if on and wanted:lower() == lower then return true end
-		end
-		return false
-	end
-
-	-- Short cooldown instead of a permanent skip. A failed buy usually
-	-- means "not enough Sheckles right now", which stops being true a
-	-- minute later — writing the pet off forever was wrong.
-	local cooldown = {}
-
-	-- Two passes. Gathering candidates first lets "are any of them
-	-- actually marked as pets?" decide the rule, rather than a fixed
-	-- guess that was wrong in both directions: too strict found nothing,
-	-- too loose walked into NPCs.
-	-- Structured like the drop collector: sweep everything already out
-	-- there when you switch it on, watch for new spawns as they appear,
-	-- and work through a queue one at a time. The old version rescanned
-	-- every model in the world four times a second, which on this farm
-	-- is tens of thousands of instances per pass.
-	local queue = {}
-
-	local function queued(model)
-		for _, entry in ipairs(queue) do
-			if entry.model == model then return true end
-		end
-		return false
-	end
-
-	local function offer(inst)
-		if not inst:IsA("Model") then return end
-		if inst:FindFirstAncestor("Gardens") then return end
-
-		local petName = petNameOf(inst)
-		if not petName then return end
-		if not chosen(petName) then return end
-		if queued(inst) then return end
-
-		table.insert(queue, { model = inst, name = petName })
-	end
-
-	-- Everything already spawned. Sliced, same as the drop sweep.
-	local function sweep()
-		local scanned = 0
-		for _, inst in ipairs(Workspace:GetDescendants()) do
-			if not Pets.enabled or Shovel.stopped then return end
-			offer(inst)
-			scanned += 1
-			if scanned % 2000 == 0 then task.wait() end
-		end
-	end
-
-	Workspace.DescendantAdded:Connect(function(inst)
-		if not Pets.enabled or Shovel.stopped then return end
-		-- A wild pet spawns as a model with its parts underneath, so the
-		-- attributes may not be set the instant it appears.
-		task.delay(0.2, function()
-			if inst.Parent then pcall(offer, inst) end
-		end)
-	end)
-
-	-- The picker and status still need to know what's out there, but
-	-- that's a slow, cheap question compared to driving the buy loop.
-	task.spawn(function()
-		while task.wait(2) do
-			if Shovel.stopped then return end
-			local seen, here = {}, {}
-			for _, entry in ipairs(queue) do
-				if entry.model.Parent and not seen[entry.name] then
-					seen[entry.name] = true
-					table.insert(here, entry.name)
-				end
-			end
-			table.sort(here)
-			Pets.onMap = here
-			Pets.seen = #queue
-		end
-	end)
-
-	local function positionOf(model)
-		if not model or not model.Parent then return nil end
-		local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-		return part and part.Position or nil
-	end
-
-	-- Someone standing next to your pet is there to take it. One tap of
-	-- the shovel, not a hold: this mirrors clicking the tool yourself.
-	local function defend(position)
-		local me = Players.LocalPlayer
-		for _, other in ipairs(Players:GetPlayers()) do
-			if other ~= me and other.Character then
-				local root = other.Character:FindFirstChild("HumanoidRootPart")
-				if root and (root.Position - position).Magnitude <= Pets.defend then
-					local character = me.Character
-					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-					local shovel = nil
-					if character then
-						for _, tool in ipairs(character:GetChildren()) do
-							if tool:IsA("Tool") and tool.Name:lower():find("shovel") then shovel = tool end
-						end
-					end
-					if not shovel and humanoid then
-						local backpack = me:FindFirstChildOfClass("Backpack")
-						for _, tool in ipairs(backpack and backpack:GetChildren() or {}) do
-							if tool:IsA("Tool") and tool.Name:lower():find("shovel") then
-								pcall(function() humanoid:EquipTool(tool) end)
-								shovel = tool
-								break
-							end
-						end
-					end
-					if shovel then
-						pcall(function() shovel:Activate() end)
-						Pets.status = "defending from " .. other.Name
-						return true
-					end
-				end
-			end
-		end
-		return false
-	end
-
-	-- Escort until the pet is actually home: it vanishes into the base,
-	-- or it stops moving for a few seconds because it has arrived. The
-	-- old fixed timeout meant walking away from a pet still in transit
-	-- to go buy another one.
-	-- Once bought, the wild model is replaced by an owned one under
-	-- _PetVisualClient, so following the original alone would stop the
-	-- moment the purchase lands. Follow whichever exists.
-	local function ownedPetNamed(name)
-		local myName = Players.LocalPlayer.Name
-		local container = Workspace:FindFirstChild("_PetVisualClient")
-		local models = container and container:FindFirstChild("Models")
-		if not models then return nil end
-
-		for _, inst in ipairs(models:GetChildren()) do
-			if inst:IsA("Model") and inst.Name:lower() == name:lower() then
-				local ok, owner = pcall(function() return inst:GetAttribute("Owner") end)
-				if ok and owner == myName then return inst end
-			end
-		end
-		return nil
-	end
-
-	local function escort(model, name)
-		local deadline = tick() + 180
-		local lastPosition = nil
-		local stillSince = tick()
-		local lostSince = nil
-
-		while tick() < deadline and Pets.enabled and not Shovel.stopped do
-			local target = (model and model.Parent) and model or ownedPetNamed(name)
-			if not target then
-				-- Give it a moment: there's a gap between the wild pet
-				-- disappearing and the owned one appearing.
-				lostSince = lostSince or tick()
-				if tick() - lostSince > 3 then
-					Pets.status = "lost track of " .. name
-					return
-				end
-				task.wait(Pets.follow)
-			else
-				lostSince = nil
-				local position = positionOf(target)
-				if not position then break end
-
-				local root = Drop.getRoot()
-				if root then
-					root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
-				end
-				if not defend(position) then
-					Pets.status = "escorting " .. name .. " home"
-				end
-
-				if lastPosition and (position - lastPosition).Magnitude > 1 then
-					stillSince = tick()
-				elseif tick() - stillSince > 4 then
-					Pets.status = name .. " arrived"
-					return
-				end
-				lastPosition = position
-
-				task.wait(Pets.follow)
-			end
-		end
-	end
-
-	task.spawn(function()
-		while true do
-			local found = catalogue()
-			-- Anything on the map that the catalogue missed still
-			-- belongs in the list.
-			local known = {}
-			for _, name in ipairs(found) do known[name] = true end
-			for _, name in ipairs(Pets.onMap) do
-				if not known[name] then
-					known[name] = true
-					table.insert(found, name)
-				end
-			end
-			table.sort(found)
-			Pets.names = found
-			task.wait(30)
-		end
-	end)
-
-	task.spawn(function()
-		local wasEnabled = false
-
-		while task.wait(0.05) do
-			if Shovel.stopped then return end
-
-			-- Rising edge sweeps what is already out there, exactly like
-			-- the drop collector; disabling clears the queue so it can't
-			-- act on stale targets later.
-			if Pets.enabled and not wasEnabled then
-				wasEnabled = true
-				task.spawn(sweep)
-			elseif not Pets.enabled then
-				if wasEnabled then queue = {} end
-				wasEnabled = false
-				Pets.status = "off"
-			end
-
-			if Pets.enabled and not VIM then
-				Pets.status = "this executor has no VirtualInputManager"
-			elseif Pets.enabled and #queue > 0 then
-				local entry = table.remove(queue, 1)
-				local model = entry.model
-				-- One pet you can't afford would otherwise be retried as
-				-- fast as the loop runs.
-				if entry.lastTry and tick() - entry.lastTry < 1 then
-					table.insert(queue, entry)
-					task.wait(0.25)
-					entry = nil
-					model = nil
-				end
-
-				-- Still there, still unowned.
-				if model and model.Parent and petNameOf(model) then
-					entry.lastTry = tick()
-					local position = positionOf(model)
-					if position then
-						Pets.status = "going to " .. entry.name
-						local root = Drop.getRoot()
-						local origin = root and root.CFrame
-						if root then
-							root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
-						end
-						task.wait(0.2)
-
-						Pets.status = "holding E to buy " .. entry.name
-						-- Nothing announces the sale, but it costs
-						-- Sheckles, so the balance falling is the
-						-- confirmation.
-						local before = getCurrentSheckles()
-						holdE(1.2)
-						task.wait(0.4)
-						local after = getCurrentSheckles()
-
-						if before and after and after >= before then
-							-- Couldn't afford it. Straight back on the
-							-- end of the queue and keep trying: waiting
-							-- fifteen seconds meant a pet could despawn
-							-- while sitting on a timer, and Sheckles are
-							-- coming in the whole time anyway. Going to
-							-- the end rather than the front lets the
-							-- other pets have a turn first.
-							Pets.status = entry.name .. " — not enough Sheckles, retrying"
-							table.insert(queue, entry)
-						else
-							Pets.bought += 1
-							escort(model, entry.name)
-						end
-
-						local rootNow = Drop.getRoot()
-						if rootNow and origin then rootNow.CFrame = origin end
-					end
-				end
-			elseif Pets.enabled then
-				Pets.status = #Pets.onMap > 0
-					and (#Pets.onMap .. " on the map, none ticked")
-					or "waiting for a pet to spawn"
-			end
-		end
-	end)
-end
-
---========================================================
 -- Top-level tabs + page containers
 --========================================================
 local topTabBar = Instance.new("Frame")
@@ -2474,7 +1930,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Pets", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -2497,8 +1953,8 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 8 tabs across a 388px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 44)
+	-- 7 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 51)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -3471,190 +2927,6 @@ do
 end
 
 --========================================================
--- PETS page
---========================================================
-do
-	local petsPage = pages.Pets
-
-	RemoteWidgets.petsEnabled = select(2, createToggleRow(petsPage, 0, "Enable Auto Buy Pets", Shovel.pets.enabled, function(state)
-		Shovel.pets.enabled = state
-	end))
-
-	RemoteWidgets.petsFollow = select(2, createSlider(petsPage, 32, "Follow delay", 0.01, 1, Shovel.pets.follow, "s", function(v)
-		Shovel.pets.follow = v
-	end))
-
-	RemoteWidgets.petsDefend = select(2, createSlider(petsPage, 76, "Defend within", 0, 60, Shovel.pets.defend, "studs", function(v)
-		Shovel.pets.defend = v
-	end))
-
-	local note = Instance.new("TextLabel")
-	note.BackgroundTransparency = 1
-	note.Position = UDim2.new(0, 16, 0, 122)
-	note.Size = UDim2.new(1, -32, 0, 30)
-	note.Font = Enum.Font.Gotham
-	note.Text = ""
-	note.TextColor3 = Color3.fromRGB(200, 200, 205)
-	note.TextSize = 11
-	note.TextWrapped = true
-	note.TextXAlignment = Enum.TextXAlignment.Left
-	note.TextYAlignment = Enum.TextYAlignment.Top
-	note.Parent = petsPage
-
-	-- Which pets to buy. Nothing ticked means any, so it works out of
-	-- the box; tick some and it buys only those.
-	local bulkRow = Instance.new("Frame")
-	bulkRow.BackgroundTransparency = 1
-	bulkRow.Position = UDim2.new(0, 16, 0, 156)
-	bulkRow.Size = UDim2.new(1, -32, 0, 24)
-	bulkRow.Parent = petsPage
-
-	local bulkLayout = Instance.new("UIListLayout")
-	bulkLayout.FillDirection = Enum.FillDirection.Horizontal
-	bulkLayout.Padding = UDim.new(0, 6)
-	bulkLayout.Parent = bulkRow
-
-	local allBtn = pillButton(bulkRow, "Select All", 90)
-	local noneBtn = pillButton(bulkRow, "None", 90)
-
-	local list = Instance.new("ScrollingFrame")
-	list.Position = UDim2.new(0, 16, 0, 186)
-	list.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Pets - 186 - 8)
-	list.BackgroundTransparency = 1
-	list.CanvasSize = UDim2.new(0, 0, 0, 0)
-	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	list.ScrollBarThickness = 3
-	list.ScrollBarImageTransparency = 0.4
-	list.BorderSizePixel = 0
-	list.Parent = petsPage
-
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.Padding = UDim.new(0, 4)
-	listLayout.Parent = list
-
-	local entries = {}
-	local query = ""
-
-	local function rebuild()
-		for _, child in ipairs(list:GetChildren()) do
-			if child:IsA("Frame") then child:Destroy() end
-		end
-		entries = {}
-
-		for _, name in ipairs(Shovel.pets.names) do
-			local row = Instance.new("Frame")
-			row.Size = UDim2.new(1, 0, 0, 28)
-			row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-			row.BackgroundTransparency = 0.93
-			row.Visible = matchesQuery(name, query)
-			row.Parent = list
-
-			local rowCorner = Instance.new("UICorner")
-			rowCorner.CornerRadius = UDim.new(0, 8)
-			rowCorner.Parent = row
-
-			local label = Instance.new("TextLabel")
-			label.BackgroundTransparency = 1
-			label.Position = UDim2.new(0, 10, 0, 0)
-			label.Size = UDim2.new(1, -46, 1, 0)
-			label.Font = Enum.Font.Gotham
-			label.Text = name
-			label.TextColor3 = Color3.fromRGB(230, 230, 235)
-			label.TextSize = 12
-			label.TextXAlignment = Enum.TextXAlignment.Left
-			label.TextTruncate = Enum.TextTruncate.AtEnd
-			label.Parent = row
-
-			local toggle = Instance.new("TextButton")
-			toggle.Position = UDim2.new(1, -34, 0.5, -9)
-			toggle.Size = UDim2.new(0, 26, 0, 18)
-			toggle.AutoButtonColor = false
-			toggle.Text = ""
-			toggle.Parent = row
-
-			local toggleCorner = Instance.new("UICorner")
-			toggleCorner.CornerRadius = UDim.new(1, 0)
-			toggleCorner.Parent = toggle
-
-			local knob = Instance.new("Frame")
-			knob.Size = UDim2.new(0, 14, 0, 14)
-			knob.Position = UDim2.new(0, 2, 0.5, -7)
-			knob.Parent = toggle
-			local knobCorner = Instance.new("UICorner")
-			knobCorner.CornerRadius = UDim.new(1, 0)
-			knobCorner.Parent = knob
-
-			local function paint()
-				local on = Shovel.pets.selected[name] == true
-				toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
-				knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
-				knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-			end
-			paint()
-
-			toggle.MouseButton1Click:Connect(function()
-				Shovel.pets.selected[name] = not (Shovel.pets.selected[name] == true)
-				paint()
-			end)
-
-			table.insert(entries, { name = name, paint = paint, frame = row })
-		end
-	end
-
-	searchBox(bulkRow, function(text)
-		query = text
-		for _, entry in ipairs(entries) do
-			entry.frame.Visible = matchesQuery(entry.name, query)
-		end
-	end)
-
-	allBtn.MouseButton1Click:Connect(function()
-		for _, entry in ipairs(entries) do
-			if entry.frame.Visible then
-				Shovel.pets.selected[entry.name] = true
-				entry.paint()
-			end
-		end
-	end)
-	noneBtn.MouseButton1Click:Connect(function()
-		for _, entry in ipairs(entries) do
-			if entry.frame.Visible then
-				Shovel.pets.selected[entry.name] = false
-				entry.paint()
-			end
-		end
-	end)
-
-	RemoteRepaint.pets = function()
-		for _, entry in ipairs(entries) do
-			entry.paint()
-		end
-	end
-
-	rebuild()
-
-	task.spawn(function()
-		local shown = ""
-		while task.wait(0.4) do
-			-- Rebuild only when the map's pet list actually changes.
-			local signature = table.concat(Shovel.pets.names, "|")
-			if signature ~= shown then
-				shown = signature
-				rebuild()
-			end
-			note.Text = string.format(
-				"Bought: %d · %s · %d pet(s) known, %d on the map",
-				Shovel.pets.bought,
-				Shovel.pets.status,
-				#Shovel.pets.names,
-				#Shovel.pets.onMap
-			)
-			note.TextColor3 = Shovel.pets.bought > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
-		end
-	end)
-end
-
---========================================================
 -- SHOVEL page
 --
 -- Wrapped in a do-block so its locals don't count against the main
@@ -4127,14 +3399,6 @@ do
 			RemoteRepaint.shovel()
 		end
 
-		if applySelection(Shovel.pets.selected, config.petsWanted) and RemoteRepaint.pets then
-			RemoteRepaint.pets()
-		end
-
-		Shovel.pets.enabled = switch("petsEnabled", config.petsEnabled, Shovel.pets.enabled)
-		Shovel.pets.follow = slider("petsFollow", config.petsFollow, Shovel.pets.follow, 0.01, 1)
-		Shovel.pets.defend = slider("petsDefend", config.petsDefend, Shovel.pets.defend, 0, 60)
-
 		Shovel.enabled = switch("shovelEnabled", config.shovelEnabled, Shovel.enabled)
 		Shovel.interval = slider("shovelInterval", config.shovelInterval, Shovel.interval, 0.001, 10)
 
@@ -4187,17 +3451,10 @@ do
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
-				petsEnabled = Shovel.pets.enabled,
-				petsFollow = Shovel.pets.follow,
-				petsDefend = Shovel.pets.defend,
 			},
 			shoveled = Shovel.removed,
-			petsBought = Shovel.pets.bought,
-			petsStatus = Shovel.pets.status,
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
-			mapPets = Shovel.pets.names,
-			petsOnMap = Shovel.pets.onMap,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
@@ -4211,7 +3468,6 @@ do
 				drops = RemoteSelectedList(CollectSelected),
 				harvestExcluded = RemoteSelectedList(HarvestExcluded),
 				shovel = RemoteSelectedList(Shovel.selected),
-				pets = RemoteSelectedList(Shovel.pets.selected),
 			},
 		}
 	end
@@ -4225,7 +3481,7 @@ do
 	local codeLabel = Instance.new("TextLabel")
 	codeLabel.BackgroundTransparency = 1
 	codeLabel.AnchorPoint = Vector2.new(1, 0)
-	codeLabel.Position = UDim2.new(1, -44, 0, 12)
+	codeLabel.Position = UDim2.new(1, -16, 0, 12)
 	codeLabel.Size = UDim2.new(0, 150, 0, 18)
 	codeLabel.Font = Enum.Font.Code
 	codeLabel.Text = httpRequest and ("code: " .. Code) or "no HTTP"
@@ -4279,7 +3535,6 @@ do
 				-- 0.5s, so a switch flipped on the site lands almost
 				-- immediately rather than after a visible pause.
 				task.wait(0.5)
-				if Shovel.stopped then return end
 			end
 		end)
 
@@ -4530,9 +3785,6 @@ do
 			collectDwell = CollectDwell,
 			shovelEnabled = Shovel.enabled,
 			shovelInterval = Shovel.interval,
-			petsEnabled = Shovel.pets.enabled,
-			petsFollow = Shovel.pets.follow,
-			petsDefend = Shovel.pets.defend,
 			buySeeds = listOf(Selected.Seeds),
 			buyGears = listOf(Selected.Gears),
 			buyCrates = listOf(Selected.Crates),
@@ -4540,7 +3792,6 @@ do
 			collectItems = listOf(CollectSelected),
 			harvestExcluded = listOf(HarvestExcluded),
 			shovelPlants = listOf(Shovel.selected),
-			petsWanted = listOf(Shovel.pets.selected),
 		}
 	end
 
@@ -4572,9 +3823,6 @@ do
 		end
 		if fill(Shovel.selected, saved.shovelPlants) and RemoteRepaint.shovel then
 			pcall(RemoteRepaint.shovel)
-		end
-		if fill(Shovel.pets.selected, saved.petsWanted) and RemoteRepaint.pets then
-			pcall(RemoteRepaint.pets)
 		end
 
 		if saved.plantMode and RemoteRepaint.plantMode then

@@ -1964,17 +1964,6 @@ do
 		return true
 	end
 
-	-- Without a prompt to key off, a pet is a Model with a Humanoid that
-	-- is nobody's character and isn't a shopkeeper. Anything already
-	-- following you is skipped: it's yours, and buying it again is just
-	-- teleporting to your own pet forever.
-	local function isPlayerCharacter(model)
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player.Character == model then return true end
-		end
-		return false
-	end
-
 	-- NPCs are Humanoid models too, which is exactly why it kept walking
 	-- to them. Names, dialogue and shop prompts are what separate a
 	-- shopkeeper from a pet.
@@ -1997,23 +1986,28 @@ do
 		return false
 	end
 
-	-- A real pet marker: an attribute whose name mentions a pet, or a
-	-- container that does.
-	local function petMarker(model)
+	-- What a pet actually is, read off the game rather than guessed:
+	--
+	--   Workspace._PetVisualClient.Models.Bunny
+	--     PetID     = "d12ec6d6-..."
+	--     Owner     = "Rayaanalternate"
+	--     OwnerSlot = "PetPart2"
+	--
+	-- No Humanoid anywhere, which is why every earlier scan came back
+	-- empty: it required one. An Owner attribute naming you means the
+	-- pet is already yours — those are the ones following you around,
+	-- and buying them again is nonsense.
+	local function petIdOf(model)
 		local ok, attrs = pcall(function() return model:GetAttributes() end)
-		if ok and attrs then
-			for key in pairs(attrs) do
-				if tostring(key):lower():find("pet") then return true end
-			end
+		if not ok or not attrs then return nil, nil end
+
+		local id, owner = nil, nil
+		for key, value in pairs(attrs) do
+			local k = tostring(key):lower()
+			if k == "petid" then id = value end
+			if k == "owner" then owner = value end
 		end
-		local node = model.Parent
-		local depth = 0
-		while node and node ~= Workspace and depth < 4 do
-			if node.Name:lower():find("pet") then return true end
-			node = node.Parent
-			depth += 1
-		end
-		return false
+		return id, owner
 	end
 
 	local function chosen(name)
@@ -2039,30 +2033,24 @@ do
 	-- guess that was wrong in both directions: too strict found nothing,
 	-- too loose walked into NPCs.
 	local function petModels()
-		local candidates = {}
+		local myName = Players.LocalPlayer.Name
+		local pool = {}
+
 		for _, inst in ipairs(Workspace:GetDescendants()) do
-			if
-				inst:IsA("Model")
-				and inst:FindFirstChildOfClass("Humanoid")
-				and not isPlayerCharacter(inst)
-				and not looksLikeVendor(inst)
-			then
-				local ok, garden = pcall(function()
-					return inst:GetAttribute("PlantId") ~= nil or inst:GetAttribute("Owner") ~= nil
-				end)
-				if ok and not garden then table.insert(candidates, inst) end
+			if inst:IsA("Model") and not looksLikeVendor(inst) then
+				local id, owner = petIdOf(inst)
+				-- A PetID makes it a pet; an Owner naming you makes it
+				-- already yours.
+				if id and owner ~= myName then
+					table.insert(pool, inst)
+				end
 			end
 		end
 
-		local marked = {}
-		for _, model in ipairs(candidates) do
-			if petMarker(model) then table.insert(marked, model) end
-		end
-		local pool = #marked > 0 and marked or candidates
-		Pets.strict = #marked > 0
+		Pets.strict = true
 
-		-- Publish everything found, ticked or not, so the picker can
-		-- show you what's out there.
+		-- Publish everything found, ticked or not, so the picker shows
+		-- what's out there.
 		local seen, names = {}, {}
 		for _, model in ipairs(pool) do
 			if not seen[model.Name] then
@@ -3402,7 +3390,7 @@ do
 				"Bought: %d · %s%s",
 				Shovel.pets.bought,
 				Shovel.pets.status,
-				Shovel.pets.strict and "" or " (no pet markers — matching loosely)"
+				Shovel.pets.strict and "" or " (loose matching)"
 			)
 			note.TextColor3 = Shovel.pets.bought > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
 		end

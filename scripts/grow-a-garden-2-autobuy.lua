@@ -2176,7 +2176,10 @@ do
 		return false
 	end
 
-	local owned = {}
+	-- Short cooldown instead of a permanent skip. A failed buy usually
+	-- means "not enough Sheckles right now", which stops being true a
+	-- minute later — writing the pet off forever was wrong.
+	local cooldown = {}
 
 	-- Two passes. Gathering candidates first lets "are any of them
 	-- actually marked as pets?" decide the rule, rather than a fixed
@@ -2189,14 +2192,15 @@ do
 		for _, inst in ipairs(Workspace:GetDescendants()) do
 			if inst:IsA("Model") and inst:FindFirstAncestor("Gardens") == nil then
 				local petName = petNameOf(inst)
-				if petName then
-					if chosen(petName) then
-						sawNamed += 1
-						if owned[inst] then
-							if not rejected then rejected = petName .. " (already tried)" end
-						else
-							table.insert(pool, { model = inst, name = petName })
+				if petName and chosen(petName) then
+					sawNamed += 1
+					local until_ = cooldown[inst]
+					if until_ and tick() < until_ then
+						if not rejected then
+							rejected = string.format("%s (retrying in %.0fs)", petName, until_ - tick())
 						end
+					else
+						table.insert(pool, { model = inst, name = petName })
 					end
 				end
 			end
@@ -2266,32 +2270,64 @@ do
 	-- or it stops moving for a few seconds because it has arrived. The
 	-- old fixed timeout meant walking away from a pet still in transit
 	-- to go buy another one.
-	local function escort(model)
+	-- Once bought, the wild model is replaced by an owned one under
+	-- _PetVisualClient, so following the original alone would stop the
+	-- moment the purchase lands. Follow whichever exists.
+	local function ownedPetNamed(name)
+		local myName = Players.LocalPlayer.Name
+		local container = Workspace:FindFirstChild("_PetVisualClient")
+		local models = container and container:FindFirstChild("Models")
+		if not models then return nil end
+
+		for _, inst in ipairs(models:GetChildren()) do
+			if inst:IsA("Model") and inst.Name:lower() == name:lower() then
+				local ok, owner = pcall(function() return inst:GetAttribute("Owner") end)
+				if ok and owner == myName then return inst end
+			end
+		end
+		return nil
+	end
+
+	local function escort(model, name)
 		local deadline = tick() + 180
 		local lastPosition = nil
 		local stillSince = tick()
+		local lostSince = nil
 
-		while tick() < deadline and Pets.enabled and model and model.Parent do
-			local position = positionOf(model)
-			if not position then break end
+		while tick() < deadline and Pets.enabled and not Shovel.stopped do
+			local target = (model and model.Parent) and model or ownedPetNamed(name)
+			if not target then
+				-- Give it a moment: there's a gap between the wild pet
+				-- disappearing and the owned one appearing.
+				lostSince = lostSince or tick()
+				if tick() - lostSince > 3 then
+					Pets.status = "lost track of " .. name
+					return
+				end
+				task.wait(Pets.follow)
+			else
+				lostSince = nil
+				local position = positionOf(target)
+				if not position then break end
 
-			local root = Drop.getRoot()
-			if root then
-				root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
+				local root = Drop.getRoot()
+				if root then
+					root.CFrame = CFrame.new(position + Vector3.new(0, 4, 0))
+				end
+				if not defend(position) then
+					Pets.status = "escorting " .. name .. " home"
+				end
+
+				if lastPosition and (position - lastPosition).Magnitude > 1 then
+					stillSince = tick()
+				elseif tick() - stillSince > 4 then
+					Pets.status = name .. " arrived"
+					return
+				end
+				lastPosition = position
+
+				task.wait(Pets.follow)
 			end
-			if not defend(position) then
-				Pets.status = "escorting a pet home"
-			end
-
-			if lastPosition and (position - lastPosition).Magnitude > 1 then
-				stillSince = tick()
-			elseif tick() - stillSince > 4 then
-				Pets.status = "pet arrived"
-				return
-			end
-			lastPosition = position
-
-			task.wait(Pets.follow)
 		end
 	end
 
@@ -2351,26 +2387,23 @@ do
 						end
 						task.wait(0.2)
 
-						Pets.status = "holding E to buy"
+						Pets.status = "holding E to buy " .. entry.name
 						-- Nothing announces the sale, but it costs
 						-- Sheckles — so the balance falling is the
-						-- confirmation. Without this, failing to afford
-						-- a pet would send it chasing a stranger's pet
-						-- around the map for a minute and a half.
+						-- confirmation.
 						local before = getCurrentSheckles()
 						holdE(1.2)
 						task.wait(0.4)
 						local after = getCurrentSheckles()
 
 						if before and after and after >= before then
-							-- Not ours. Skip it so the next pass tries a
-							-- different one instead of retrying forever.
-							owned[model] = true
-							Pets.status = "couldn't buy — Sheckles didn't change"
+							-- Almost always "can't afford it yet", so try
+							-- again shortly rather than never.
+							cooldown[model] = tick() + 15
+							Pets.status = entry.name .. " — Sheckles didn't change, retrying"
 						else
-							owned[model] = true
 							Pets.bought += 1
-							escort(model)
+							escort(model, entry.name)
 						end
 
 						local rootNow = Drop.getRoot()

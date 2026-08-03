@@ -2019,35 +2019,67 @@ do
 	-- Read from wherever the game keeps them: pet containers in
 	-- ReplicatedStorage, and any pet config module that returns a table
 	-- keyed by name.
+	-- A pet registry, not everything with "pet" in its name. The loose
+	-- version swept up items and attribute names, so both sources are
+	-- now required to look like real pet records.
+	local PET_CONTAINERS = { "pets", "petmodels", "petassets" }
+
+	local function isPetContainer(name)
+		local lower = name:lower()
+		for _, wanted in ipairs(PET_CONTAINERS) do
+			if lower == wanted then return true end
+		end
+		return false
+	end
+
+	-- A pet's config entry describes a creature: it has a rarity, a
+	-- price, a model, or a hatch chance. A random settings table keyed by
+	-- string does not.
+	local function looksLikePetRecord(record)
+		if type(record) ~= "table" then return false end
+		for key in pairs(record) do
+			local k = tostring(key):lower()
+			if
+				k:find("rarity")
+				or k:find("price")
+				or k:find("cost")
+				or k:find("chance")
+				or k:find("model")
+				or k:find("passive")
+				or k:find("ability")
+			then
+				return true
+			end
+		end
+		return false
+	end
+
 	local function catalogue()
 		local names = {}
 		local seen = {}
 
 		local function addName(name)
 			name = tostring(name)
-			if name ~= "" and not seen[name] then
-				seen[name] = true
-				table.insert(names, name)
-			end
+			-- Attribute-ish and id-ish strings are not pet names.
+			if name == "" or seen[name] then return end
+			if name:find("%-") and #name >= 16 then return end
+			seen[name] = true
+			table.insert(names, name)
 		end
 
 		local function scan(container)
 			for _, inst in ipairs(container:GetDescendants()) do
-				local lower = inst.Name:lower()
-
-				-- A folder of pet models: its children are pet names.
-				if (inst:IsA("Folder") or inst:IsA("Model")) and lower:find("pet") then
+				if (inst:IsA("Folder") or inst:IsA("Model")) and isPetContainer(inst.Name) then
 					for _, child in ipairs(inst:GetChildren()) do
 						if child:IsA("Model") then addName(child.Name) end
 					end
 				end
 
-				-- A config module: keys are pet names.
-				if inst:IsA("ModuleScript") and lower:find("pet") then
+				if inst:IsA("ModuleScript") and inst.Name:lower():find("pet") then
 					local ok, data = pcall(require, inst)
 					if ok and type(data) == "table" then
 						for key, value in pairs(data) do
-							if type(key) == "string" and type(value) == "table" then
+							if type(key) == "string" and looksLikePetRecord(value) then
 								addName(key)
 							end
 						end
@@ -2084,14 +2116,21 @@ do
 	-- too loose walked into NPCs.
 	local function petModels()
 		local myName = Players.LocalPlayer.Name
-		local pool = {}
 
+		-- Names from the catalogue, so a pet for sale is recognised even
+		-- if it carries no PetID until someone owns it. That's the gap
+		-- that left nothing to teleport to.
+		local known = {}
+		for _, name in ipairs(Pets.names) do known[name] = true end
+
+		local pool = {}
 		for _, inst in ipairs(Workspace:GetDescendants()) do
 			if inst:IsA("Model") and not looksLikeVendor(inst) then
 				local id, owner = petIdOf(inst)
-				-- A PetID makes it a pet; an Owner naming you makes it
-				-- already yours.
-				if id and owner ~= myName then
+				local mine = owner == myName
+				local inGarden = inst:FindFirstAncestor("Gardens") ~= nil
+
+				if not mine and not inGarden and (id or known[inst.Name]) then
 					table.insert(pool, inst)
 				end
 			end
@@ -2099,7 +2138,6 @@ do
 
 		Pets.strict = true
 
-		-- What's on the map right now, for the status line.
 		local seen, here = {}, {}
 		for _, model in ipairs(pool) do
 			if not seen[model.Name] then
@@ -2233,6 +2271,7 @@ do
 					local position = positionOf(model)
 					if position then
 						Pets.busy = true
+						Pets.status = "going to " .. model.Name
 						local root = Drop.getRoot()
 						local origin = root and root.CFrame
 						if root then

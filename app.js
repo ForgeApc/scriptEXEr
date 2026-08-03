@@ -874,6 +874,14 @@ runScript(toRun)
       list: "plant",
     },
     {
+      name: "Water",
+      controls: [
+        { key: "sprinklerEnabled", label: "Auto sprinkler", type: "toggle" },
+        { key: "sprinklerEvery", label: "Seeds per sprinkler", type: "slider", min: 1, max: 100, step: 1, unit: "" },
+      ],
+      sprinkler: true,
+    },
+    {
       name: "Shovel",
       controls: [
         { key: "shovelEnabled", label: "Enable Auto Shovel", type: "toggle" },
@@ -1142,6 +1150,15 @@ runScript(toRun)
     return `<div class="hud-note ${found ? "good" : ""}">Dug up: ${s.shoveled || 0} · ${escapeHtml(s.shovelStatus || "idle")}</div>`;
   }
 
+  function hudSprinklerHtml(status) {
+    const s = status || {};
+    const placed = s.sprinklersPlaced || 0;
+    const wanted = (s.settings && s.settings.sprinklerWanted) || "";
+    return `
+      <div class="hud-note ${placed > 0 ? "good" : ""}">Placed: ${placed} · ${escapeHtml(s.sprinklerStatus || "off")}</div>
+      <div class="hud-note">Using: ${wanted ? escapeHtml(wanted) : "any sprinkler you're holding"} · pick one in game</div>`;
+  }
+
   function hudHtml(config, status, activeTab) {
     const tab = CONTROL_TABS.find((t) => t.name === activeTab) || CONTROL_TABS[0];
     return `
@@ -1162,6 +1179,7 @@ runScript(toRun)
             : (tab.controls || []).map((c) => hudControlHtml(c, config)).join("") +
               (tab.modes ? hudModesHtml(status) : "") +
               (tab.shovel ? hudShovelHtml(status) : "") +
+              (tab.sprinkler ? hudSprinklerHtml(status) : "") +
               (tab.list ? hudListHtml(tab.list, status, controlState.subTab) : "")}
         </div>
       </div>`;

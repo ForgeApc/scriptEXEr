@@ -898,28 +898,6 @@ do
 	return column, row, columns, rows
 	end
 
-	-- The middle of a crop's block, which is where its sprinkler goes —
-	-- a sprinkler dropped at a random spot in the patch would water it
-	-- lopsidedly.
-	function Shovel.blockCentre(seedName)
-		local ground = getPlotGround()
-		if not ground then return nil end
-
-		local column, row, columns, rows = seedBlock(seedName)
-		if not column then return nil end
-
-		local spanX = ground.Size.X * 0.9
-		local spanZ = ground.Size.Z * 0.9
-		local cellX = spanX / columns
-		local cellZ = spanZ / rows
-		local offsetX = -spanX / 2 + column * cellX + cellX / 2
-		local offsetZ = -spanZ / 2 + row * cellZ + cellZ / 2
-
-		local spot = ground.CFrame * CFrame.new(offsetX, 0, offsetZ)
-		local topY = ground.Position.Y + (ground.Size.Y / 2)
-		return Vector3.new(spot.Position.X, topY, spot.Position.Z)
-	end
-
 	function randomPlotPosition(seedName)
 	local ground = getPlotGround()
 	if not ground then return nil end
@@ -1049,20 +1027,6 @@ task.spawn(function()
 					if firePlant(tool.Name, position) then
 						PlantFiredCount += 1
 						PlantLastFired = tool.Name
-
-						-- Enough of this crop in its block? Water it.
-						local sprinkler = Shovel.sprinkler
-						if sprinkler.enabled and PlantMode == "random" then
-							local seed = tool.Name
-							sprinkler.counts[seed] = (sprinkler.counts[seed] or 0) + 1
-							if sprinkler.counts[seed] >= sprinkler.every then
-								sprinkler.counts[seed] = 0
-								local centre = Shovel.blockCentre(seed)
-								if centre then
-									Shovel.placeSprinkler(centre)
-								end
-							end
-						end
 					end
 				end
 
@@ -1291,157 +1255,6 @@ do
 			end
 		end
 	end)
-end
-
---========================================================
--- SPRINKLERS — drops a sprinkler on a block once enough seeds have gone
--- into it, so each crop's patch gets watered without you placing them.
---
--- The placement remote isn't named in anything dumped from this game, so
--- rather than guess, candidates are tried and judged by whether a new
--- sprinkler actually appears in the plot's Sprinklers folder. That
--- folder is the confirmation the plant remote never had.
---========================================================
-do
-	local Sprinkler = Shovel.sprinkler
-
-	local function sprinklerFolder()
-		return OwnerPlot and OwnerPlot:FindFirstChild("Sprinklers") or nil
-	end
-
-	local function countPlaced()
-		local folder = sprinklerFolder()
-		return folder and #folder:GetChildren() or 0
-	end
-
-	-- What the shop sells, so the picker offers real names.
-	task.spawn(function()
-		while task.wait(5) do
-			if Shovel.stopped then return end
-			local names = {}
-			for _, item in ipairs(GearsStock:GetChildren()) do
-				if item.Name:lower():find("sprinkler") then
-					table.insert(names, item.Name)
-				end
-			end
-			table.sort(names)
-			Sprinkler.names = names
-		end
-	end)
-
-	local function heldSprinkler()
-		local player = Players.LocalPlayer
-		local character = player.Character
-		if not character then return nil end
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if not humanoid then return nil end
-
-		local wanted = Sprinkler.wanted and Sprinkler.wanted:lower() or nil
-
-		local function match(container)
-			if not container then return nil end
-			for _, tool in ipairs(container:GetChildren()) do
-				if tool:IsA("Tool") then
-					local name = tool.Name:lower()
-					if name:find("sprinkler") and (not wanted or name:find(wanted, 1, true)) then
-						return tool
-					end
-				end
-			end
-			return nil
-		end
-
-		local tool = match(character) or match(player:FindFirstChildOfClass("Backpack"))
-		if not tool then return nil end
-
-		if tool.Parent ~= character then
-			pcall(function() humanoid:EquipTool(tool) end)
-			local deadline = tick() + 0.5
-			while tick() < deadline and tool.Parent ~= character do
-				task.wait(0.03)
-			end
-		end
-		return tool
-	end
-
-	-- Remembered once something works, so later placements skip straight
-	-- to it.
-	local known = nil
-
-	local function candidates(position, tool, name)
-		local cf = CFrame.new(position)
-		return {
-			{ label = "pos_name_tool", args = { position, name, tool }, n = 3 },
-			{ label = "name_pos_tool", args = { name, position, tool }, n = 3 },
-			{ label = "pos_tool", args = { position, tool }, n = 2 },
-			{ label = "name_pos", args = { name, position }, n = 2 },
-			{ label = "cf_name_tool", args = { cf, name, tool }, n = 3 },
-			{ label = "pos_only", args = { position }, n = 1 },
-		}
-	end
-
-	local function remotes()
-		local found = {}
-		local function walk(node, prefix, depth)
-			if depth > 3 or type(node) ~= "table" then return end
-			pcall(function()
-				for key, value in pairs(node) do
-					local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
-					local lower = path:lower()
-					if lower:find("sprinkler") or lower:find("gear") or lower:find("place") then
-						local okFire, fire = pcall(function() return value.Fire end)
-						if okFire and type(fire) == "function" then
-							table.insert(found, { path = path, remote = value })
-						end
-					end
-					if type(value) == "table" then walk(value, path, depth + 1) end
-				end
-			end)
-		end
-		walk(Networking, "", 1)
-		return found
-	end
-
-	function Shovel.placeSprinkler(position)
-		local tool = heldSprinkler()
-		if not tool then
-			Sprinkler.status = "no sprinkler in your inventory"
-			return false
-		end
-
-		local before = countPlaced()
-		local list = known and { known } or remotes()
-		if #list == 0 then
-			Sprinkler.status = "no placement remote found in this world"
-			return false
-		end
-
-		for _, entry in ipairs(list) do
-			for _, shape in ipairs(candidates(position, tool, tool.Name)) do
-				pcall(function()
-					entry.remote:Fire(table.unpack(shape.args, 1, shape.n))
-				end)
-
-				-- Placement replicates; judge it by the folder, not by
-				-- the call returning.
-				local deadline = tick() + 0.4
-				while tick() < deadline do
-					if countPlaced() > before then
-						known = entry
-						Sprinkler.placed += 1
-						Sprinkler.status = "placed via " .. entry.path
-						return true
-					end
-					task.wait(0.05)
-				end
-
-				if known then break end
-			end
-		end
-
-		Sprinkler.status = #list .. " candidate remote(s), none placed one yet"
-		return false
-	end
 end
 
 --========================================================
@@ -1793,7 +1606,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Water = 420, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -2177,7 +1990,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Water", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -2200,8 +2013,8 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 8 tabs across a 388px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 44)
+	-- 7 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 51)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -3187,164 +3000,6 @@ do
 end
 
 --========================================================
--- WATER page — auto sprinklers
---========================================================
-do
-	local waterPage = pages.Water
-	local Sprinkler = Shovel.sprinkler
-
-	RemoteWidgets.sprinklerEnabled = select(2, createToggleRow(waterPage, 0, "Auto sprinkler", Sprinkler.enabled, function(state)
-		Sprinkler.enabled = state
-	end))
-
-	RemoteWidgets.sprinklerEvery = select(2, createSlider(waterPage, 32, "Seeds per sprinkler", 1, 100, Sprinkler.every, "", function(v)
-		Sprinkler.every = math.max(1, math.floor(v + 0.5))
-	end))
-
-	local note = Instance.new("TextLabel")
-	note.BackgroundTransparency = 1
-	note.Position = UDim2.new(0, 16, 0, 76)
-	note.Size = UDim2.new(1, -32, 0, 44)
-	note.Font = Enum.Font.Gotham
-	note.Text = ""
-	note.TextColor3 = Color3.fromRGB(200, 200, 205)
-	note.TextSize = 11
-	note.TextWrapped = true
-	note.TextXAlignment = Enum.TextXAlignment.Left
-	note.TextYAlignment = Enum.TextYAlignment.Top
-	note.Parent = waterPage
-
-	-- Which sprinkler to use. One choice, not a set: you place one kind.
-	local bulkRow = Instance.new("Frame")
-	bulkRow.BackgroundTransparency = 1
-	bulkRow.Position = UDim2.new(0, 16, 0, 124)
-	bulkRow.Size = UDim2.new(1, -32, 0, 24)
-	bulkRow.Parent = waterPage
-
-	local bulkLayout = Instance.new("UIListLayout")
-	bulkLayout.FillDirection = Enum.FillDirection.Horizontal
-	bulkLayout.Padding = UDim.new(0, 6)
-	bulkLayout.Parent = bulkRow
-
-	local anyBtn = pillButton(bulkRow, "Any I'm holding", 120)
-
-	local list = Instance.new("ScrollingFrame")
-	list.Position = UDim2.new(0, 16, 0, 154)
-	list.Size = UDim2.new(1, -32, 0, PAGE_HEIGHTS.Water - 154 - 8)
-	list.BackgroundTransparency = 1
-	list.CanvasSize = UDim2.new(0, 0, 0, 0)
-	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	list.ScrollBarThickness = 3
-	list.ScrollBarImageTransparency = 0.4
-	list.BorderSizePixel = 0
-	list.Parent = waterPage
-
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.Padding = UDim.new(0, 4)
-	listLayout.Parent = list
-
-	local entries = {}
-
-	local function paintAll()
-		for _, entry in ipairs(entries) do
-			entry.paint()
-		end
-	end
-
-	local function rebuild()
-		for _, child in ipairs(list:GetChildren()) do
-			if child:IsA("Frame") then child:Destroy() end
-		end
-		entries = {}
-
-		for _, name in ipairs(Sprinkler.names) do
-			local row = Instance.new("Frame")
-			row.Size = UDim2.new(1, 0, 0, 28)
-			row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-			row.BackgroundTransparency = 0.93
-			row.Parent = list
-
-			local rowCorner = Instance.new("UICorner")
-			rowCorner.CornerRadius = UDim.new(0, 8)
-			rowCorner.Parent = row
-
-			local label = Instance.new("TextLabel")
-			label.BackgroundTransparency = 1
-			label.Position = UDim2.new(0, 10, 0, 0)
-			label.Size = UDim2.new(1, -46, 1, 0)
-			label.Font = Enum.Font.Gotham
-			label.Text = name
-			label.TextColor3 = Color3.fromRGB(230, 230, 235)
-			label.TextSize = 12
-			label.TextXAlignment = Enum.TextXAlignment.Left
-			label.TextTruncate = Enum.TextTruncate.AtEnd
-			label.Parent = row
-
-			local toggle = Instance.new("TextButton")
-			toggle.Position = UDim2.new(1, -34, 0.5, -9)
-			toggle.Size = UDim2.new(0, 26, 0, 18)
-			toggle.AutoButtonColor = false
-			toggle.Text = ""
-			toggle.Parent = row
-
-			local toggleCorner = Instance.new("UICorner")
-			toggleCorner.CornerRadius = UDim.new(1, 0)
-			toggleCorner.Parent = toggle
-
-			local knob = Instance.new("Frame")
-			knob.Size = UDim2.new(0, 14, 0, 14)
-			knob.Position = UDim2.new(0, 2, 0.5, -7)
-			knob.Parent = toggle
-			local knobCorner = Instance.new("UICorner")
-			knobCorner.CornerRadius = UDim.new(1, 0)
-			knobCorner.Parent = knob
-
-			local function paint()
-				local on = Sprinkler.wanted == name
-				toggle.BackgroundColor3 = on and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(60, 60, 64)
-				knob.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
-				knob.Position = on and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-			end
-			paint()
-
-			toggle.MouseButton1Click:Connect(function()
-				-- Picking one unpicks the rest.
-				Sprinkler.wanted = (Sprinkler.wanted == name) and nil or name
-				paintAll()
-			end)
-
-			table.insert(entries, { name = name, paint = paint })
-		end
-	end
-
-	anyBtn.MouseButton1Click:Connect(function()
-		Sprinkler.wanted = nil
-		paintAll()
-	end)
-
-	RemoteRepaint.sprinkler = paintAll
-	rebuild()
-
-	task.spawn(function()
-		local shown = ""
-		while task.wait(0.5) do
-			local signature = table.concat(Sprinkler.names, "|")
-			if signature ~= shown then
-				shown = signature
-				rebuild()
-			end
-			note.Text = string.format(
-				"Placed: %d · %s\nDrops one in a crop's block every %d plants. Needs Plant mode set to Random.",
-				Sprinkler.placed,
-				Sprinkler.status,
-				Sprinkler.every
-			)
-			note.TextColor3 = Sprinkler.placed > 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(200, 200, 205)
-		end
-	end)
-end
-
---========================================================
 -- SHOVEL page
 --
 -- Wrapped in a do-block so its locals don't count against the main
@@ -3817,13 +3472,6 @@ do
 			RemoteRepaint.shovel()
 		end
 
-		Shovel.sprinkler.enabled = switch("sprinklerEnabled", config.sprinklerEnabled, Shovel.sprinkler.enabled)
-		Shovel.sprinkler.every = slider("sprinklerEvery", config.sprinklerEvery, Shovel.sprinkler.every, 1, 100)
-		if config.sprinklerWanted ~= nil then
-			Shovel.sprinkler.wanted = config.sprinklerWanted ~= "" and config.sprinklerWanted or nil
-			if RemoteRepaint.sprinkler then RemoteRepaint.sprinkler() end
-		end
-
 		Shovel.enabled = switch("shovelEnabled", config.shovelEnabled, Shovel.enabled)
 		Shovel.interval = slider("shovelInterval", config.shovelInterval, Shovel.interval, 0.001, 10)
 
@@ -3876,14 +3524,8 @@ do
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
-				sprinklerEnabled = Shovel.sprinkler.enabled,
-				sprinklerEvery = Shovel.sprinkler.every,
-				sprinklerWanted = Shovel.sprinkler.wanted or "",
 			},
 			shoveled = Shovel.removed,
-			sprinklersPlaced = Shovel.sprinkler.placed,
-			sprinklerStatus = Shovel.sprinkler.status,
-			sprinklerNames = Shovel.sprinkler.names,
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
@@ -4223,9 +3865,6 @@ do
 			collectItems = listOf(CollectSelected),
 			harvestExcluded = listOf(HarvestExcluded),
 			shovelPlants = listOf(Shovel.selected),
-			sprinklerEnabled = Shovel.sprinkler.enabled,
-			sprinklerEvery = Shovel.sprinkler.every,
-			sprinklerWanted = Shovel.sprinkler.wanted or "",
 		}
 	end
 
@@ -4257,10 +3896,6 @@ do
 		end
 		if fill(Shovel.selected, saved.shovelPlants) and RemoteRepaint.shovel then
 			pcall(RemoteRepaint.shovel)
-		end
-		if type(saved.sprinklerWanted) == "string" then
-			Shovel.sprinkler.wanted = saved.sprinklerWanted ~= "" and saved.sprinklerWanted or nil
-			if RemoteRepaint.sprinkler then pcall(RemoteRepaint.sprinkler) end
 		end
 
 		if saved.plantMode and RemoteRepaint.plantMode then

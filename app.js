@@ -916,7 +916,8 @@ runScript(toRun)
       controls: [
         { key: "lowPower", label: "Low power (stop drawing the world)", type: "toggle" },
         { key: "rejoinEnabled", label: "Rejoin before the client dies", type: "toggle" },
-        { key: "rejoinLimit", label: "Rejoin above", type: "slider", min: 500, max: 8000, step: 100, unit: " MB" },
+        { key: "rejoinAuto", label: "Work the limit out for this device", type: "toggle" },
+        { key: "rejoinLimit", label: "Or rejoin above", type: "slider", min: 500, max: 8000, step: 100, unit: " MB" },
       ],
     },
     { name: "Presets", presets: true },
@@ -970,6 +971,7 @@ runScript(toRun)
     const rate = typeof s.perSecond === "number" ? s.perSecond : null;
     const rows = [
       ["Memory", typeof s.memoryMb === "number" ? Math.round(s.memoryMb) + " MB" : "—", ""],
+      ["Highest seen", typeof s.memoryCeilingMb === "number" && s.memoryCeilingMb > 0 ? Math.round(s.memoryCeilingMb) + " MB" : "—", ""],
       ["FPS", typeof s.fps === "number" ? String(s.fps) : "—", s.fps >= 45 ? "good" : s.fps >= 20 ? "" : "bad"],
       ["Elapsed time", hudElapsed(s.elapsed), ""],
       ["Earned so far", hudNumber(s.earned), "good"],

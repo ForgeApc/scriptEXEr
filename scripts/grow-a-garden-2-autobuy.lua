@@ -1614,7 +1614,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 350, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 380, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3518,6 +3518,9 @@ do
 		if type(config.rejoinEnabled) == "boolean" and RemoteWidgets.rejoinEnabled then
 			RemoteWidgets.rejoinEnabled(config.rejoinEnabled)
 		end
+		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
+			RemoteWidgets.rejoinAuto(config.rejoinAuto)
+		end
 		if type(config.rejoinLimit) == "number" and RemoteWidgets.rejoinLimit then
 			RemoteWidgets.rejoinLimit(config.rejoinLimit)
 		end
@@ -3603,6 +3606,7 @@ do
 				collectDwell = CollectDwell,
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
 				rejoinEnabled = Rejoin.enabled,
+				rejoinAuto = Rejoin.auto,
 				rejoinLimit = Rejoin.limitMb,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
@@ -3612,6 +3616,7 @@ do
 			gardenPlants = Shovel.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
 			memoryMb = Rejoin.mb,
+			memoryCeilingMb = Rejoin.ceilingMb,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
 			-- asking you to type item names.
@@ -3807,13 +3812,21 @@ do
 		Rejoin.enabled = state
 	end))
 
-	RemoteWidgets.rejoinLimit = select(2, createSlider(statsPage, 294, "Rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
+	RemoteWidgets.rejoinAuto = select(2, createToggleRow(statsPage, 292, "Work the limit out for this device", Rejoin.auto, function(state)
+		Rejoin.auto = state
+	end))
+
+	RemoteWidgets.rejoinLimit = select(2, createSlider(statsPage, 322, "Or rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
 		Rejoin.limitMb = math.max(100, math.floor(v + 0.5))
+		-- Touching the slider means you want that number, not a
+		-- calculated one.
+		Rejoin.auto = false
+		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(false) end
 	end))
 
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 334)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 362)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -3965,6 +3978,7 @@ do
 			sellMode = Sell.mode,
 			sellThreshold = Sell.threshold,
 			rejoinEnabled = Rejoin.enabled,
+			rejoinAuto = Rejoin.auto,
 			rejoinLimit = Rejoin.limitMb,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
@@ -4146,8 +4160,11 @@ end
 --========================================================
 local Rejoin = {
 	enabled = false,
-	limitMb = 3000,
+	auto = true, -- work the limit out from this device rather than a number you pick
+	limitMb = 3000, -- used when auto is off
 	mb = 0,
+	peakMb = 0, -- highest this session
+	ceilingMb = 0, -- highest ever seen on this device, across sessions
 	status = "off",
 }
 
@@ -4155,6 +4172,42 @@ do
 	local TeleportService = game:GetService("TeleportService")
 	local StatsService = game:GetService("Stats")
 	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
+
+	-- Roblox gives no way to read the device's total RAM: Stats reports
+	-- what the client is using, not what the machine has. So the ceiling
+	-- is learned instead — the highest figure this device has ever
+	-- reached, remembered across sessions in the settings file, which is
+	-- a better guide than any guess about the hardware.
+	--
+	-- Rejoining at 70% of that keeps a wide margin: the peak is where it
+	-- was still alive, and the crash is somewhere above it.
+	local CEILING_FILE = "scriptexer_gag2_memory.txt"
+	local CEILING_FRACTION = 0.7
+	local FLOOR_MB = 1200 -- never rejoin below this, whatever it learns
+
+	local function loadCeiling()
+		if type(readfile) ~= "function" or type(isfile) ~= "function" then return 0 end
+		local ok, value = pcall(function()
+			if isfile(CEILING_FILE) then return tonumber(readfile(CEILING_FILE)) end
+			return nil
+		end)
+		return (ok and value) or 0
+	end
+
+	local function saveCeiling(value)
+		if type(writefile) ~= "function" then return end
+		pcall(writefile, CEILING_FILE, tostring(math.floor(value)))
+	end
+
+	local function autoLimit()
+		local ceiling = Rejoin.ceilingMb
+		if ceiling <= 0 then
+			-- Nothing learned yet. Sit above the floor and let the first
+			-- session teach it.
+			return math.max(FLOOR_MB, 2500)
+		end
+		return math.max(FLOOR_MB, ceiling * CEILING_FRACTION)
+	end
 
 	local function memoryMb()
 		local ok, value = pcall(function()
@@ -4198,16 +4251,30 @@ do
 		end
 	end
 
+	Rejoin.ceilingMb = loadCeiling()
+
 	task.spawn(function()
 		local overSince = nil
 		while task.wait(5) do
 			if Shovel.stopped then return end
 
 			Rejoin.mb = memoryMb()
+
+			-- Every new high teaches the device's ceiling a little more.
+			if Rejoin.mb > Rejoin.peakMb then
+				Rejoin.peakMb = Rejoin.mb
+				if Rejoin.mb > Rejoin.ceilingMb then
+					Rejoin.ceilingMb = Rejoin.mb
+					saveCeiling(Rejoin.mb)
+				end
+			end
+
+			local limit = Rejoin.auto and autoLimit() or Rejoin.limitMb
+
 			if not Rejoin.enabled then
 				Rejoin.status = "off"
 				overSince = nil
-			elseif Rejoin.mb >= Rejoin.limitMb then
+			elseif Rejoin.mb >= limit then
 				-- Held for fifteen seconds before acting: memory spikes
 				-- during loading and settles, and rejoining on a spike
 				-- would put you in a loop of rejoining forever.
@@ -4216,10 +4283,15 @@ do
 					rejoin()
 					return
 				end
-				Rejoin.status = string.format("%.0fMB — over limit, watching", Rejoin.mb)
+				Rejoin.status = string.format("%.0fMB of %.0fMB — over, watching", Rejoin.mb, limit)
 			else
 				overSince = nil
-				Rejoin.status = string.format("%.0fMB used", Rejoin.mb)
+				Rejoin.status = string.format(
+					"%.0fMB · rejoins at %.0fMB%s",
+					Rejoin.mb,
+					limit,
+					Rejoin.auto and (" (70%% of " .. string.format("%.0f", math.max(Rejoin.ceilingMb, limit / CEILING_FRACTION)) .. "MB seen)") or ""
+				)
 			end
 		end
 	end)

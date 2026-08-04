@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 460, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 500, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3580,6 +3580,9 @@ do
 		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
 			RemoteWidgets.rejoinAuto(config.rejoinAuto)
 		end
+		if type(config.rejoinPercent) == "number" and RemoteWidgets.rejoinPercent then
+			RemoteWidgets.rejoinPercent(config.rejoinPercent)
+		end
 		if type(config.rejoinRam) == "number" and RemoteWidgets.rejoinRam then
 			RemoteWidgets.rejoinRam(config.rejoinRam)
 		end
@@ -3675,7 +3678,9 @@ do
 				rejoinLimit = Rejoin.limitMb,
 				rejoinFps = Rejoin.fpsFloor,
 			rejoinRam = Rejoin.ramGb,
+			rejoinPercent = Rejoin.percent,
 				rejoinRam = Rejoin.ramGb,
+				rejoinPercent = Rejoin.percent,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3897,13 +3902,17 @@ do
 		Rejoin.ramGb = math.max(0, v)
 	end))
 
-	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 400, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
+	RemoteWidgets.rejoinPercent = select(2, createSlider(statsPage, 400, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
+		Rejoin.percent = math.clamp(math.floor(v + 0.5), 10, 95)
+	end))
+
+	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 444, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
 		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
 	end))
 
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 440)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 484)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -4220,6 +4229,7 @@ local Rejoin = {
 	limitMb = 3000, -- used when auto is off
 	mb = 0,
 	ramGb = 0, -- your device's RAM, if you tell it; 0 means work it out
+	percent = 70, -- how much of it to use before rejoining
 	fpsFloor = 12, -- sustained frames per second below this counts as struggling
 	peakMb = 0, -- highest this session
 	ceilingMb = 0, -- highest ever seen on this device, across sessions
@@ -4240,8 +4250,7 @@ do
 	-- Rejoining at 70% of that keeps a wide margin: the peak is where it
 	-- was still alive, and the crash is somewhere above it.
 	local CEILING_FILE = "scriptexer_gag2_memory.txt"
-	local CEILING_FRACTION = 0.7
-	local FLOOR_MB = 1200 -- never rejoin below this, whatever it learns
+	local FLOOR_MB = 1200 -- never rejoin below this, whatever it works out
 
 	local function loadCeiling()
 		if type(readfile) ~= "function" or type(isfile) ~= "function" then return 0 end
@@ -4261,8 +4270,10 @@ do
 		-- If you've told it how much RAM the device has, that beats
 		-- anything it could infer: a real number about the machine
 		-- rather than the highest figure it happens to have survived.
+		local fraction = math.clamp(Rejoin.percent, 10, 95) / 100
+
 		if Rejoin.ramGb and Rejoin.ramGb > 0 then
-			return math.max(FLOOR_MB, Rejoin.ramGb * 1024 * CEILING_FRACTION)
+			return math.max(FLOOR_MB, Rejoin.ramGb * 1024 * fraction)
 		end
 
 		local ceiling = Rejoin.ceilingMb
@@ -4271,7 +4282,7 @@ do
 			-- session teach it.
 			return math.max(FLOOR_MB, 2500)
 		end
-		return math.max(FLOOR_MB, ceiling * CEILING_FRACTION)
+		return math.max(FLOOR_MB, ceiling * fraction)
 	end
 
 	local function memoryMb()
@@ -4384,7 +4395,15 @@ do
 					fps and (fps .. " fps") or "fps unknown",
 					limit,
 					struggling and " (lowered — frame rate is struggling)" or "",
-					Rejoin.auto and (" (70%% of " .. string.format("%.0f", math.max(Rejoin.ceilingMb, limit / CEILING_FRACTION)) .. "MB seen)") or ""
+					Rejoin.auto
+						and string.format(
+							" (%d%% of %s)",
+							Rejoin.percent,
+							Rejoin.ramGb > 0
+								and (string.format("%.0f", Rejoin.ramGb) .. "GB")
+								or (string.format("%.0f", Rejoin.ceilingMb) .. "MB seen")
+						)
+						or ""
 				)
 			end
 		end

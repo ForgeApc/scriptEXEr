@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 545, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 400, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -2057,7 +2057,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
+local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats", "Health" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -2080,8 +2080,8 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 7 tabs across a 388px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 51)
+	-- 8 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 44)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -3580,6 +3580,12 @@ do
 		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
 			RemoteWidgets.rejoinAuto(config.rejoinAuto)
 		end
+		if type(config.rejoinMemHold) == "number" and RemoteWidgets.rejoinMemHold then
+			RemoteWidgets.rejoinMemHold(config.rejoinMemHold)
+		end
+		if type(config.rejoinFpsHold) == "number" and RemoteWidgets.rejoinFpsHold then
+			RemoteWidgets.rejoinFpsHold(config.rejoinFpsHold)
+		end
 		if type(config.rejoinNudge) == "number" and RemoteWidgets.rejoinNudge then
 			RemoteWidgets.rejoinNudge(config.rejoinNudge)
 		end
@@ -3683,9 +3689,13 @@ do
 			rejoinRam = Rejoin.ramGb,
 			rejoinPercent = Rejoin.percent,
 			rejoinNudge = Rejoin.fpsNudge,
+			rejoinMemHold = Rejoin.memHold,
+			rejoinFpsHold = Rejoin.fpsHold,
 				rejoinRam = Rejoin.ramGb,
 				rejoinPercent = Rejoin.percent,
 				rejoinNudge = Rejoin.fpsNudge,
+				rejoinMemHold = Rejoin.memHold,
+				rejoinFpsHold = Rejoin.fpsHold,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3791,6 +3801,7 @@ end
 -- you actually watch while farming, at a fraction of the cost.
 --========================================================
 do
+	local healthPage = pages.Health
 	local LowPower = false
 	local RunService = game:GetService("RunService")
 
@@ -3881,20 +3892,20 @@ do
 
 	RemoteReaders.lowPower = function() return LowPower end
 
-	RemoteWidgets.lowPower = select(2, createToggleRow(statsPage, 232, "Low power (stop drawing the world)", LowPower, function(state)
+	RemoteWidgets.lowPower = select(2, createToggleRow(healthPage, 0, "Low power (stop drawing the world)", LowPower, function(state)
 		LowPower = state
 		applyLowPower(state)
 	end))
 
-	RemoteWidgets.rejoinEnabled = select(2, createToggleRow(statsPage, 262, "Rejoin before the client dies", Rejoin.enabled, function(state)
+	RemoteWidgets.rejoinEnabled = select(2, createToggleRow(healthPage, 30, "Rejoin before the client dies", Rejoin.enabled, function(state)
 		Rejoin.enabled = state
 	end))
 
-	RemoteWidgets.rejoinAuto = select(2, createToggleRow(statsPage, 292, "Work the limit out for this device", Rejoin.auto, function(state)
+	RemoteWidgets.rejoinAuto = select(2, createToggleRow(healthPage, 60, "Work the limit out for this device", Rejoin.auto, function(state)
 		Rejoin.auto = state
 	end))
 
-	RemoteWidgets.rejoinLimit = select(2, createSlider(statsPage, 322, "Or rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
+	RemoteWidgets.rejoinLimit = select(2, createSlider(healthPage, 92, "Or rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
 		Rejoin.limitMb = math.max(100, math.floor(v + 0.5))
 		-- Touching the slider means you want that number, not a
 		-- calculated one.
@@ -3903,32 +3914,43 @@ do
 	end))
 
 	-- Typed, not dragged: you know this number, and 0 means work it out.
-	RemoteWidgets.rejoinRam = select(2, createSlider(statsPage, 356, "My device RAM (0 = work it out)", 0, 32, Rejoin.ramGb, " GB", function(v)
+	RemoteWidgets.rejoinRam = select(2, createSlider(healthPage, 136, "My device RAM (0 = auto)", 0, 32, Rejoin.ramGb, " GB", function(v)
 		Rejoin.ramGb = math.max(0, v)
 	end))
 
-	RemoteWidgets.rejoinPercent = select(2, createSlider(statsPage, 400, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
+	RemoteWidgets.rejoinPercent = select(2, createSlider(healthPage, 180, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
 		Rejoin.percent = math.clamp(math.floor(v + 0.5), 10, 95)
 	end))
 
-	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 444, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
+	RemoteWidgets.rejoinFps = select(2, createSlider(healthPage, 224, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
 		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
 	end))
 
-	RemoteWidgets.rejoinNudge = select(2, createSlider(statsPage, 488, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
+	RemoteWidgets.rejoinNudge = select(2, createSlider(healthPage, 268, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
 		Rejoin.fpsNudge = math.clamp(math.floor(v + 0.5), 0, 50)
+	end))
+
+	-- How long each signal has to persist. Memory settles after loading
+	-- and frame rate dips for a moment all the time, so acting on either
+	-- instantly would rejoin you for nothing.
+	RemoteWidgets.rejoinMemHold = select(2, createSlider(healthPage, 312, "Memory must hold for", 5, 120, Rejoin.memHold, "s", function(v)
+		Rejoin.memHold = math.max(5, math.floor(v + 0.5))
+	end))
+
+	RemoteWidgets.rejoinFpsHold = select(2, createSlider(healthPage, 356, "Low fps must hold for", 5, 300, Rejoin.fpsHold, "s", function(v)
+		Rejoin.fpsHold = math.max(5, math.floor(v + 0.5))
 	end))
 
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 528)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 388)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
 	rejoinNote.TextColor3 = Color3.fromRGB(200, 200, 205)
 	rejoinNote.TextSize = 10
 	rejoinNote.TextXAlignment = Enum.TextXAlignment.Left
-	rejoinNote.Parent = statsPage
+	rejoinNote.Parent = healthPage
 
 	task.spawn(function()
 		while task.wait(1) do
@@ -4241,6 +4263,8 @@ local Rejoin = {
 	percent = 70, -- how much of it to use before rejoining
 	fpsFloor = 12, -- sustained frames per second below this counts as struggling
 	fpsNudge = 10, -- percent to lower the limit by while it struggles; 0 disables
+	memHold = 15, -- seconds memory must stay over the limit before acting
+	fpsHold = 30, -- seconds the frame rate must stay low before it counts
 	peakMb = 0, -- highest this session
 	ceilingMb = 0, -- highest ever seen on this device, across sessions
 	status = "off",
@@ -4383,18 +4407,19 @@ do
 			-- memory limit down by a tenth rather than forcing a rejoin
 			-- on its own: frame rate dips for all sorts of innocent
 			-- reasons, memory only goes one way.
-			local struggling = slowSince ~= nil and (tick() - slowSince) >= 30
+			local struggling = slowSince ~= nil and (tick() - slowSince) >= Rejoin.fpsHold
 
 			if not Rejoin.enabled then
 				Rejoin.status = "off"
 				overSince = nil
 				slowSince = nil
 			elseif Rejoin.mb >= limit then
-				-- Held for fifteen seconds before acting: memory spikes
-				-- during loading and settles, and rejoining on a spike
-				-- would put you in a loop of rejoining forever.
+				-- Held for a while before acting: memory spikes during
+				-- loading and settles, and rejoining on a spike would put
+				-- you in a loop of rejoining forever. How long is yours
+				-- to set.
 				overSince = overSince or tick()
-				if tick() - overSince >= 15 then
+				if tick() - overSince >= Rejoin.memHold then
 					rejoin()
 					return
 				end

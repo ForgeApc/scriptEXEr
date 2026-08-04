@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 500, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 545, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3580,6 +3580,9 @@ do
 		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
 			RemoteWidgets.rejoinAuto(config.rejoinAuto)
 		end
+		if type(config.rejoinNudge) == "number" and RemoteWidgets.rejoinNudge then
+			RemoteWidgets.rejoinNudge(config.rejoinNudge)
+		end
 		if type(config.rejoinPercent) == "number" and RemoteWidgets.rejoinPercent then
 			RemoteWidgets.rejoinPercent(config.rejoinPercent)
 		end
@@ -3679,8 +3682,10 @@ do
 				rejoinFps = Rejoin.fpsFloor,
 			rejoinRam = Rejoin.ramGb,
 			rejoinPercent = Rejoin.percent,
+			rejoinNudge = Rejoin.fpsNudge,
 				rejoinRam = Rejoin.ramGb,
 				rejoinPercent = Rejoin.percent,
+				rejoinNudge = Rejoin.fpsNudge,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3910,9 +3915,13 @@ do
 		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
 	end))
 
+	RemoteWidgets.rejoinNudge = select(2, createSlider(statsPage, 488, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
+		Rejoin.fpsNudge = math.clamp(math.floor(v + 0.5), 0, 50)
+	end))
+
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 484)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 528)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -4231,6 +4240,7 @@ local Rejoin = {
 	ramGb = 0, -- your device's RAM, if you tell it; 0 means work it out
 	percent = 70, -- how much of it to use before rejoining
 	fpsFloor = 12, -- sustained frames per second below this counts as struggling
+	fpsNudge = 10, -- percent to lower the limit by while it struggles; 0 disables
 	peakMb = 0, -- highest this session
 	ceilingMb = 0, -- highest ever seen on this device, across sessions
 	status = "off",
@@ -4352,8 +4362,10 @@ do
 			end
 
 			local limit = Rejoin.auto and autoLimit() or Rejoin.limitMb
-			if struggling then
-				limit = limit * 0.9
+			-- How much a struggling frame rate matters is yours to set:
+			-- 10% by default, 0 to ignore frame rate entirely.
+			if struggling and Rejoin.fpsNudge > 0 then
+				limit = limit * (1 - math.clamp(Rejoin.fpsNudge, 0, 50) / 100)
 			end
 
 			-- Memory is the clearest signal but not the only one: a client
@@ -4394,7 +4406,9 @@ do
 					Rejoin.mb,
 					fps and (fps .. " fps") or "fps unknown",
 					limit,
-					struggling and " (lowered — frame rate is struggling)" or "",
+					(struggling and Rejoin.fpsNudge > 0)
+						and string.format(" (down %d%% — frame rate struggling)", Rejoin.fpsNudge)
+						or "",
 					Rejoin.auto
 						and string.format(
 							" (%d%% of %s)",

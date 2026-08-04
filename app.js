@@ -921,6 +921,7 @@ runScript(toRun)
         { key: "rejoinRam", label: "My device RAM (0 = work it out)", type: "slider", min: 0, max: 32, step: 1, unit: " GB" },
         { key: "rejoinPercent", label: "Rejoin at", type: "slider", min: 10, max: 95, step: 1, unit: "%" },
         { key: "rejoinFps", label: "Nudge down under", type: "slider", min: 1, max: 30, step: 1, unit: " fps" },
+        { key: "rejoinNudge", label: "Lower it by", type: "slider", min: 0, max: 50, step: 1, unit: "%" },
       ],
     },
     { name: "Presets", presets: true },

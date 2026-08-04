@@ -918,6 +918,7 @@ runScript(toRun)
         { key: "rejoinEnabled", label: "Rejoin before the client dies", type: "toggle" },
         { key: "rejoinAuto", label: "Work the limit out for this device", type: "toggle" },
         { key: "rejoinLimit", label: "Or rejoin above", type: "slider", min: 500, max: 8000, step: 100, unit: " MB" },
+        { key: "rejoinFps", label: "Or under", type: "slider", min: 1, max: 30, step: 1, unit: " fps" },
       ],
     },
     { name: "Presets", presets: true },

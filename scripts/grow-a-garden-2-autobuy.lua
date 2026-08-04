@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 380, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 420, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3580,6 +3580,9 @@ do
 		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
 			RemoteWidgets.rejoinAuto(config.rejoinAuto)
 		end
+		if type(config.rejoinFps) == "number" and RemoteWidgets.rejoinFps then
+			RemoteWidgets.rejoinFps(config.rejoinFps)
+		end
 		if type(config.rejoinLimit) == "number" and RemoteWidgets.rejoinLimit then
 			RemoteWidgets.rejoinLimit(config.rejoinLimit)
 		end
@@ -3667,6 +3670,7 @@ do
 				rejoinEnabled = Rejoin.enabled,
 				rejoinAuto = Rejoin.auto,
 				rejoinLimit = Rejoin.limitMb,
+				rejoinFps = Rejoin.fpsFloor,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3883,9 +3887,13 @@ do
 		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(false) end
 	end))
 
+	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 356, "Or under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
+		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
+	end))
+
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 362)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 398)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -4039,6 +4047,7 @@ do
 			rejoinEnabled = Rejoin.enabled,
 			rejoinAuto = Rejoin.auto,
 			rejoinLimit = Rejoin.limitMb,
+			rejoinFps = Rejoin.fpsFloor,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
 			collectReturn = CollectReturn,
@@ -4200,6 +4209,7 @@ local Rejoin = {
 	auto = true, -- work the limit out from this device rather than a number you pick
 	limitMb = 3000, -- used when auto is off
 	mb = 0,
+	fpsFloor = 12, -- sustained frames per second below this counts as dying
 	peakMb = 0, -- highest this session
 	ceilingMb = 0, -- highest ever seen on this device, across sessions
 	status = "off",
@@ -4292,6 +4302,8 @@ do
 
 	task.spawn(function()
 		local overSince = nil
+		local slowSince = nil
+
 		while task.wait(5) do
 			if Shovel.stopped then return end
 
@@ -4308,9 +4320,27 @@ do
 
 			local limit = Rejoin.auto and autoLimit() or Rejoin.limitMb
 
+			-- Memory is the clearest signal but not the only one: a client
+			-- can be dying on frame time while memory looks unremarkable,
+			-- and by the time it crawls it is about to go. Requiring the
+			-- low frame rate to be sustained keeps a loading hitch or a
+			-- busy moment from triggering a rejoin.
+			local fps = RemoteReaders.fps and RemoteReaders.fps() or nil
+			if fps and fps <= Rejoin.fpsFloor then
+				slowSince = slowSince or tick()
+			else
+				slowSince = nil
+			end
+			local crawling = slowSince ~= nil and (tick() - slowSince) >= 30
+
 			if not Rejoin.enabled then
 				Rejoin.status = "off"
 				overSince = nil
+				slowSince = nil
+			elseif crawling then
+				Rejoin.status = string.format("%d fps for 30s — rejoining", fps)
+				rejoin()
+				return
 			elseif Rejoin.mb >= limit then
 				-- Held for fifteen seconds before acting: memory spikes
 				-- during loading and settles, and rejoining on a spike
@@ -4324,9 +4354,11 @@ do
 			else
 				overSince = nil
 				Rejoin.status = string.format(
-					"%.0fMB · rejoins at %.0fMB%s",
+					"%.0fMB · %s · rejoins at %.0fMB or under %d fps%s",
 					Rejoin.mb,
+					fps and (fps .. " fps") or "fps unknown",
 					limit,
+					Rejoin.fpsFloor,
 					Rejoin.auto and (" (70%% of " .. string.format("%.0f", math.max(Rejoin.ceilingMb, limit / CEILING_FRACTION)) .. "MB seen)") or ""
 				)
 			end

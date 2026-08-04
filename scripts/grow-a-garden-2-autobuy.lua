@@ -1697,7 +1697,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 460, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 386, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3606,9 +3606,6 @@ do
 		if type(config.rejoinEnabled) == "boolean" and RemoteWidgets.rejoinEnabled then
 			RemoteWidgets.rejoinEnabled(config.rejoinEnabled)
 		end
-		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
-			RemoteWidgets.rejoinAuto(config.rejoinAuto)
-		end
 		if type(config.rejoinMemHold) == "number" and RemoteWidgets.rejoinMemHold then
 			RemoteWidgets.rejoinMemHold(config.rejoinMemHold)
 		end
@@ -3626,9 +3623,6 @@ do
 		end
 		if type(config.rejoinFps) == "number" and RemoteWidgets.rejoinFps then
 			RemoteWidgets.rejoinFps(config.rejoinFps)
-		end
-		if type(config.rejoinLimit) == "number" and RemoteWidgets.rejoinLimit then
-			RemoteWidgets.rejoinLimit(config.rejoinLimit)
 		end
 
 		if type(config.lowPower) == "boolean" and RemoteWidgets.lowPower then
@@ -3714,8 +3708,6 @@ do
 				collectDwell = CollectDwell,
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
 				rejoinEnabled = Rejoin.enabled,
-				rejoinAuto = Rejoin.auto,
-				rejoinLimit = Rejoin.limitMb,
 				rejoinFps = Rejoin.fpsFloor,
 			rejoinRam = Rejoin.ramGb,
 			rejoinPercent = Rejoin.percent,
@@ -3932,43 +3924,31 @@ do
 		Rejoin.enabled = state
 	end))
 
-	RemoteWidgets.rejoinAuto = select(2, createToggleRow(healthPage, 60, "Work the limit out for this device", Rejoin.auto, function(state)
-		Rejoin.auto = state
-	end))
-
-	RemoteWidgets.rejoinLimit = select(2, createSlider(healthPage, 92, "Or rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
-		Rejoin.limitMb = math.max(100, math.floor(v + 0.5))
-		-- Touching the slider means you want that number, not a
-		-- calculated one.
-		Rejoin.auto = false
-		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(false) end
-	end))
-
 	-- Typed, not dragged: you know this number, and 0 means work it out.
-	RemoteWidgets.rejoinRam = select(2, createSlider(healthPage, 136, "My device RAM (0 = auto)", 0, 32, Rejoin.ramGb, " GB", function(v)
+	RemoteWidgets.rejoinRam = select(2, createSlider(healthPage, 62, "My device RAM (0 = auto)", 0, 32, Rejoin.ramGb, " GB", function(v)
 		Rejoin.ramGb = math.max(0, v)
 	end))
 
-	RemoteWidgets.rejoinPercent = select(2, createSlider(healthPage, 180, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
+	RemoteWidgets.rejoinPercent = select(2, createSlider(healthPage, 106, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
 		Rejoin.percent = math.clamp(math.floor(v + 0.5), 10, 95)
 	end))
 
-	RemoteWidgets.rejoinFps = select(2, createSlider(healthPage, 224, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
+	RemoteWidgets.rejoinFps = select(2, createSlider(healthPage, 150, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
 		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
 	end))
 
-	RemoteWidgets.rejoinNudge = select(2, createSlider(healthPage, 268, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
+	RemoteWidgets.rejoinNudge = select(2, createSlider(healthPage, 194, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
 		Rejoin.fpsNudge = math.clamp(math.floor(v + 0.5), 0, 50)
 	end))
 
 	-- How long each signal has to persist. Memory settles after loading
 	-- and frame rate dips for a moment all the time, so acting on either
 	-- instantly would rejoin you for nothing.
-	RemoteWidgets.rejoinMemHold = select(2, createSlider(healthPage, 312, "Memory must hold for", 5, 120, Rejoin.memHold, "s", function(v)
+	RemoteWidgets.rejoinMemHold = select(2, createSlider(healthPage, 238, "Memory must hold for", 5, 120, Rejoin.memHold, "s", function(v)
 		Rejoin.memHold = math.max(5, math.floor(v + 0.5))
 	end))
 
-	RemoteWidgets.rejoinFpsHold = select(2, createSlider(healthPage, 356, "Low fps must hold for", 5, 300, Rejoin.fpsHold, "s", function(v)
+	RemoteWidgets.rejoinFpsHold = select(2, createSlider(healthPage, 282, "Low fps must hold for", 5, 300, Rejoin.fpsHold, "s", function(v)
 		Rejoin.fpsHold = math.max(5, math.floor(v + 0.5))
 	end))
 
@@ -3977,26 +3957,21 @@ do
 	-- indistinguishable from one you meant to set — so there's a way
 	-- back to them.
 	local resetBtn = pillButton(healthPage, "Reset to defaults", 150)
-	resetBtn.Position = UDim2.new(0, 16, 0, 400)
+	resetBtn.Position = UDim2.new(0, 16, 0, 326)
 	resetBtn.Size = UDim2.new(0, 150, 0, 24)
 	resetBtn.TextSize = 11
 	resetBtn.MouseButton1Click:Connect(function()
-		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(true) end
 		if RemoteWidgets.rejoinRam then RemoteWidgets.rejoinRam(0) end
 		if RemoteWidgets.rejoinPercent then RemoteWidgets.rejoinPercent(70) end
-		if RemoteWidgets.rejoinLimit then RemoteWidgets.rejoinLimit(3000) end
 		if RemoteWidgets.rejoinFps then RemoteWidgets.rejoinFps(12) end
 		if RemoteWidgets.rejoinNudge then RemoteWidgets.rejoinNudge(10) end
 		if RemoteWidgets.rejoinMemHold then RemoteWidgets.rejoinMemHold(15) end
 		if RemoteWidgets.rejoinFpsHold then RemoteWidgets.rejoinFpsHold(30) end
-		-- rejoinLimit's own handler turns auto off, so put it back.
-		Rejoin.auto = true
-		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(true) end
 	end)
 
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 432)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 358)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -4008,7 +3983,9 @@ do
 	task.spawn(function()
 		while task.wait(1) do
 			rejoinNote.Text = Rejoin.status
-			rejoinNote.TextColor3 = (Rejoin.enabled and Rejoin.mb >= Rejoin.limitMb)
+			-- Amber once memory is within a tenth of the limit, so you see
+			-- it coming rather than only after it acts.
+			rejoinNote.TextColor3 = (Rejoin.enabled and Rejoin.mb > 0 and Rejoin.status:find("over"))
 				and Color3.fromRGB(255, 200, 130)
 				or Color3.fromRGB(200, 200, 205)
 		end
@@ -4148,8 +4125,6 @@ do
 			sellMode = Sell.mode,
 			sellThreshold = Sell.threshold,
 			rejoinEnabled = Rejoin.enabled,
-			rejoinAuto = Rejoin.auto,
-			rejoinLimit = Rejoin.limitMb,
 			rejoinFps = Rejoin.fpsFloor,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
@@ -4309,8 +4284,6 @@ end
 --========================================================
 local Rejoin = {
 	enabled = false,
-	auto = true, -- work the limit out from this device rather than a number you pick
-	limitMb = 3000, -- used when auto is off
 	mb = 0,
 	ramGb = 0, -- your device's RAM, if you tell it; 0 means work it out
 	percent = 70, -- how much of it to use before rejoining
@@ -4438,7 +4411,7 @@ do
 				end
 			end
 
-			local limit = Rejoin.auto and autoLimit() or Rejoin.limitMb
+			local limit = autoLimit()
 			-- How much a struggling frame rate matters is yours to set:
 			-- 10% by default, 0 to ignore frame rate entirely.
 			if struggling and Rejoin.fpsNudge > 0 then
@@ -4487,15 +4460,13 @@ do
 					(struggling and Rejoin.fpsNudge > 0)
 						and string.format(" (down %d%% — frame rate struggling)", Rejoin.fpsNudge)
 						or "",
-					Rejoin.auto
-						and string.format(
-							" (%d%% of %s)",
-							Rejoin.percent,
-							Rejoin.ramGb > 0
-								and (string.format("%.0f", Rejoin.ramGb) .. "GB")
-								or (string.format("%.0f", Rejoin.ceilingMb) .. "MB seen")
-						)
-						or ""
+					string.format(
+						" (%d%% of %s)",
+						Rejoin.percent,
+						Rejoin.ramGb > 0
+							and (string.format("%.0f", Rejoin.ramGb) .. "GB")
+							or (string.format("%.0f", Rejoin.ceilingMb) .. "MB seen")
+					)
 				)
 			end
 		end

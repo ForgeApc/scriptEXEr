@@ -917,8 +917,6 @@ runScript(toRun)
       controls: [
         { key: "lowPower", label: "Low power (stop drawing the world)", type: "toggle" },
         { key: "rejoinEnabled", label: "Rejoin before the client dies", type: "toggle" },
-        { key: "rejoinAuto", label: "Work the limit out for this device", type: "toggle" },
-        { key: "rejoinLimit", label: "Or rejoin above", type: "slider", min: 500, max: 8000, step: 100, unit: " MB" },
         { key: "rejoinRam", label: "My device RAM (0 = auto)", type: "slider", min: 0, max: 32, step: 1, unit: " GB" },
         { key: "rejoinPercent", label: "Rejoin at", type: "slider", min: 10, max: 95, step: 1, unit: "%" },
         { key: "rejoinFps", label: "Nudge down under", type: "slider", min: 1, max: 30, step: 1, unit: " fps" },

@@ -1614,7 +1614,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 268, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 350, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3515,6 +3515,13 @@ do
 
 		-- Low power lives further down the file than this block, so it's
 		-- driven purely through its widget, which owns the variable.
+		if type(config.rejoinEnabled) == "boolean" and RemoteWidgets.rejoinEnabled then
+			RemoteWidgets.rejoinEnabled(config.rejoinEnabled)
+		end
+		if type(config.rejoinLimit) == "number" and RemoteWidgets.rejoinLimit then
+			RemoteWidgets.rejoinLimit(config.rejoinLimit)
+		end
+
 		if type(config.lowPower) == "boolean" and RemoteWidgets.lowPower then
 			RemoteWidgets.lowPower(config.lowPower)
 		end
@@ -3595,6 +3602,8 @@ do
 				collectReturn = CollectReturn,
 				collectDwell = CollectDwell,
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
+				rejoinEnabled = Rejoin.enabled,
+				rejoinLimit = Rejoin.limitMb,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3602,6 +3611,7 @@ do
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
+			memoryMb = Rejoin.mb,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
 			-- asking you to type item names.
@@ -3792,6 +3802,34 @@ do
 		LowPower = state
 		applyLowPower(state)
 	end))
+
+	RemoteWidgets.rejoinEnabled = select(2, createToggleRow(statsPage, 262, "Rejoin before the client dies", Rejoin.enabled, function(state)
+		Rejoin.enabled = state
+	end))
+
+	RemoteWidgets.rejoinLimit = select(2, createSlider(statsPage, 294, "Rejoin above", 500, 8000, Rejoin.limitMb, "MB", function(v)
+		Rejoin.limitMb = math.max(100, math.floor(v + 0.5))
+	end))
+
+	local rejoinNote = Instance.new("TextLabel")
+	rejoinNote.BackgroundTransparency = 1
+	rejoinNote.Position = UDim2.new(0, 16, 0, 334)
+	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
+	rejoinNote.Font = Enum.Font.Gotham
+	rejoinNote.Text = ""
+	rejoinNote.TextColor3 = Color3.fromRGB(200, 200, 205)
+	rejoinNote.TextSize = 10
+	rejoinNote.TextXAlignment = Enum.TextXAlignment.Left
+	rejoinNote.Parent = statsPage
+
+	task.spawn(function()
+		while task.wait(1) do
+			rejoinNote.Text = Rejoin.status
+			rejoinNote.TextColor3 = (Rejoin.enabled and Rejoin.mb >= Rejoin.limitMb)
+				and Color3.fromRGB(255, 200, 130)
+				or Color3.fromRGB(200, 200, 205)
+		end
+	end)
 end
 
 --========================================================
@@ -3926,6 +3964,8 @@ do
 			sellInterval = SellInterval,
 			sellMode = Sell.mode,
 			sellThreshold = Sell.threshold,
+			rejoinEnabled = Rejoin.enabled,
+			rejoinLimit = Rejoin.limitMb,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
 			collectReturn = CollectReturn,
@@ -4084,6 +4124,151 @@ do
 	local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
 
 	if type(queue) == "function" then
-		pcall(queue, 'loadstring(game:HttpGet("' .. SELF .. '"))()')
+		pcall(
+			queue,
+			'getgenv().SCRIPTEXER_REJOINED = true\n'
+				.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
+		)
 	end
+end
+
+--========================================================
+-- REJOIN BEFORE THE CLIENT DIES
+--
+-- Long sessions bloat: the game's own telemetry reported 1.5GB and a
+-- 17ms 90th-percentile frame on this farm. Left alone the client
+-- eventually crashes, which ends the night's farming at whatever hour it
+-- happened.
+--
+-- Rejoining is a controlled version of the same thing: settings are
+-- written to disk first, the loadstring is queued for the other side, so
+-- the script comes back up already configured and keeps going.
+--========================================================
+local Rejoin = {
+	enabled = false,
+	limitMb = 3000,
+	mb = 0,
+	status = "off",
+}
+
+do
+	local TeleportService = game:GetService("TeleportService")
+	local StatsService = game:GetService("Stats")
+	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
+
+	local function memoryMb()
+		local ok, value = pcall(function()
+			return StatsService:GetTotalMemoryUsageMb()
+		end)
+		if ok and type(value) == "number" then return value end
+
+		-- Executors without the Stats API still have Lua's own counter.
+		-- It only sees Lua memory, not the whole client, but it moves in
+		-- the same direction.
+		local okGc, kb = pcall(collectgarbage, "count")
+		return okGc and (kb / 1024) or 0
+	end
+
+	local function rejoin()
+		Rejoin.status = "rejoining…"
+
+		-- Queue first: if the teleport lands before this runs, the
+		-- script doesn't come back.
+		--
+		-- The queued line sets a flag before loading, so the copy that
+		-- wakes up on the other side knows it arrived from a rejoin and
+		-- has a loading gate to hold through.
+		local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
+		if type(queue) == "function" then
+			pcall(
+				queue,
+				'getgenv().SCRIPTEXER_REJOINED = true\n'
+					.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
+			)
+		end
+
+		-- Give the settings writer a moment to flush the current state.
+		task.wait(1.5)
+
+		local ok = pcall(function()
+			TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+		end)
+		if not ok then
+			Rejoin.status = "teleport refused — still running"
+		end
+	end
+
+	task.spawn(function()
+		local overSince = nil
+		while task.wait(5) do
+			if Shovel.stopped then return end
+
+			Rejoin.mb = memoryMb()
+			if not Rejoin.enabled then
+				Rejoin.status = "off"
+				overSince = nil
+			elseif Rejoin.mb >= Rejoin.limitMb then
+				-- Held for fifteen seconds before acting: memory spikes
+				-- during loading and settles, and rejoining on a spike
+				-- would put you in a loop of rejoining forever.
+				overSince = overSince or tick()
+				if tick() - overSince >= 15 then
+					rejoin()
+					return
+				end
+				Rejoin.status = string.format("%.0fMB — over limit, watching", Rejoin.mb)
+			else
+				overSince = nil
+				Rejoin.status = string.format("%.0fMB used", Rejoin.mb)
+			end
+		end
+	end)
+end
+
+--========================================================
+-- THROUGH THE LOADING GATE
+--
+-- Rejoining drops you on a screen you have to hold to get past, and
+-- then a second one after the world loads. Nothing else in the script
+-- matters if it's sitting behind those, so the copy that wakes up after
+-- a rejoin holds through them itself.
+--
+-- Only after a rejoin: doing this on a normal manual run would press
+-- the screen while you're using it.
+--========================================================
+if getgenv and getgenv().SCRIPTEXER_REJOINED then
+	getgenv().SCRIPTEXER_REJOINED = false
+
+	task.spawn(function()
+		local VIM = nil
+		pcall(function() VIM = game:GetService("VirtualInputManager") end)
+		if not VIM then return end
+
+		local function holdScreen(seconds)
+			local camera = Workspace.CurrentCamera
+			local size = camera and camera.ViewportSize or Vector2.new(800, 600)
+			local x, y = size.X / 2, size.Y / 2
+
+			pcall(function()
+				VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+			end)
+			task.wait(seconds)
+			pcall(function()
+				VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+			end)
+		end
+
+		-- Wait for the client to be up before pressing anything.
+		if not game:IsLoaded() then
+			game.Loaded:Wait()
+		end
+		task.wait(2)
+
+		holdScreen(3)
+
+		-- The world loads between the two gates; three seconds is the
+		-- hold, the wait after it is the load.
+		task.wait(3)
+		holdScreen(3)
+	end)
 end

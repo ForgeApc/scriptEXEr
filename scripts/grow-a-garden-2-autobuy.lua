@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 400, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 460, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3941,9 +3941,31 @@ do
 		Rejoin.fpsHold = math.max(5, math.floor(v + 0.5))
 	end))
 
+	-- The defaults are the recommendation. Saved settings quietly
+	-- override them, and a slider you nudged three sessions ago is
+	-- indistinguishable from one you meant to set — so there's a way
+	-- back to them.
+	local resetBtn = pillButton(healthPage, "Reset to defaults", 150)
+	resetBtn.Position = UDim2.new(0, 16, 0, 400)
+	resetBtn.Size = UDim2.new(0, 150, 0, 24)
+	resetBtn.TextSize = 11
+	resetBtn.MouseButton1Click:Connect(function()
+		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(true) end
+		if RemoteWidgets.rejoinRam then RemoteWidgets.rejoinRam(0) end
+		if RemoteWidgets.rejoinPercent then RemoteWidgets.rejoinPercent(70) end
+		if RemoteWidgets.rejoinLimit then RemoteWidgets.rejoinLimit(3000) end
+		if RemoteWidgets.rejoinFps then RemoteWidgets.rejoinFps(12) end
+		if RemoteWidgets.rejoinNudge then RemoteWidgets.rejoinNudge(10) end
+		if RemoteWidgets.rejoinMemHold then RemoteWidgets.rejoinMemHold(15) end
+		if RemoteWidgets.rejoinFpsHold then RemoteWidgets.rejoinFpsHold(30) end
+		-- rejoinLimit's own handler turns auto off, so put it back.
+		Rejoin.auto = true
+		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(true) end
+	end)
+
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 388)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 432)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""

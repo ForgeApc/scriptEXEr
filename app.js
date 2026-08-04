@@ -906,6 +906,8 @@ runScript(toRun)
       controls: [
         { key: "sellEnabled", label: "Enable Auto Sell", type: "toggle" },
         { key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
+        { key: "sellThreshold", label: "Sell when carrying", type: "slider", min: 1, max: 200, step: 1, unit: " crops" },
+        { note: "Trigger is picked in game: on the delay, or when the bag hits the count." },
       ],
     },
     {

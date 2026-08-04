@@ -1540,11 +1540,44 @@ end)
 --========================================================
 local SellEnabled = false
 local SellInterval = 0.5
+-- Two ways to trigger a sale, because a timer and a full bag want
+-- different things: "delay" fires on the clock, "count" waits until you
+-- are actually carrying enough to be worth a trip. One table, not three
+-- locals: the main chunk is at Lua's 200-locals ceiling.
+local Sell = { mode = "delay", threshold = 20, carrying = 0 }
+
+-- Harvested produce carries its weight in the tool name — "Maple
+-- Strawberry [1.97kg]" — which is what separates a crop you can sell
+-- from a seed, a gear or the shovel.
+function Sell.count()
+	local player = Players.LocalPlayer
+	local total = 0
+
+	local function tally(container)
+		if not container then return end
+		for _, tool in ipairs(container:GetChildren()) do
+			if tool:IsA("Tool") and tool.Name:find("%[") and tool.Name:lower():find("kg") then
+				total += 1
+			end
+		end
+	end
+
+	tally(player.Character)
+	tally(player:FindFirstChildOfClass("Backpack"))
+	return total
+end
 
 task.spawn(function()
 	while task.wait(SellInterval) do
 		if SellEnabled then
-			SellAll:Fire()
+			if Sell.mode == "count" then
+				Sell.carrying = Sell.count()
+				if Sell.carrying >= Sell.threshold then
+					SellAll:Fire()
+				end
+			else
+				SellAll:Fire()
+			end
 		end
 	end
 end)
@@ -1581,7 +1614,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 268, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3156,6 +3189,74 @@ RemoteWidgets.sellInterval = select(2, createSlider(sellPage, 36, "Sell delay", 
 	SellInterval = v
 end))
 
+do
+	-- Trigger picker. In count mode the delay above becomes how often it
+	-- checks your bag rather than how often it sells.
+	local modeRow = Instance.new("Frame")
+	modeRow.BackgroundTransparency = 1
+	modeRow.Position = UDim2.new(0, 16, 0, 80)
+	modeRow.Size = UDim2.new(1, -32, 0, 26)
+	modeRow.Parent = sellPage
+
+	local modeLayout = Instance.new("UIListLayout")
+	modeLayout.FillDirection = Enum.FillDirection.Horizontal
+	modeLayout.Padding = UDim.new(0, 8)
+	modeLayout.Parent = modeRow
+
+	local buttons = {}
+	local function paint()
+		for key, btn in pairs(buttons) do
+			local on = key == Sell.mode
+			btn.BackgroundTransparency = on and 0.75 or 0.94
+			btn.TextColor3 = on and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 185)
+		end
+	end
+
+	for _, mode in ipairs({
+		{ key = "delay", label = "On the delay" },
+		{ key = "count", label = "When bag hits" },
+	}) do
+		local btn = pillButton(modeRow, mode.label, 130)
+		buttons[mode.key] = btn
+		btn.MouseButton1Click:Connect(function()
+			Sell.mode = mode.key
+			paint()
+		end)
+	end
+	paint()
+	RemoteRepaint.sellMode = function(mode)
+		Sell.mode = mode
+		paint()
+	end
+
+	RemoteWidgets.sellThreshold = select(2, createSlider(sellPage, 112, "Sell when carrying", 1, 200, Sell.threshold, " crops", function(v)
+		Sell.threshold = math.max(1, math.floor(v + 0.5))
+	end))
+
+	local note = Instance.new("TextLabel")
+	note.BackgroundTransparency = 1
+	note.Position = UDim2.new(0, 16, 0, 156)
+	note.Size = UDim2.new(1, -32, 0, 30)
+	note.Font = Enum.Font.Gotham
+	note.Text = ""
+	note.TextColor3 = Color3.fromRGB(200, 200, 205)
+	note.TextSize = 11
+	note.TextWrapped = true
+	note.TextXAlignment = Enum.TextXAlignment.Left
+	note.TextYAlignment = Enum.TextYAlignment.Top
+	note.Parent = sellPage
+
+	task.spawn(function()
+		while task.wait(0.4) do
+			if Sell.mode == "count" then
+				note.Text = string.format("Carrying %d of %d crops.", Sell.carrying, Sell.threshold)
+			else
+				note.Text = "Selling every " .. string.format("%.3f", SellInterval) .. "s."
+			end
+		end
+	end)
+end
+
 --========================================================
 -- STATS page
 --========================================================
@@ -3175,18 +3276,22 @@ statsStatusLabel.TextSize = 11
 statsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statsStatusLabel.Parent = statsPage
 
-local elapsedValue = createStatRow(statsPage, 20, "Elapsed time")
-local earnedValue = createStatRow(statsPage, 44, "Earned so far")
-local spentValue = createStatRow(statsPage, 68, "Spent so far")
-local netValue = createStatRow(statsPage, 92, "Net so far")
-local perSecValue = createStatRow(statsPage, 124, "Per second")
-local perMinValue = createStatRow(statsPage, 148, "Per minute")
-local perHourValue = createStatRow(statsPage, 172, "Per hour")
-local perDayValue = createStatRow(statsPage, 196, "Per day")
+-- One table rather than eight locals: the main chunk sits right on
+-- Lua's 200-locals limit, and these were the cheapest eight to reclaim.
+local StatValue = {
+	elapsed = createStatRow(statsPage, 20, "Elapsed time"),
+	earned = createStatRow(statsPage, 44, "Earned so far"),
+	spent = createStatRow(statsPage, 68, "Spent so far"),
+	net = createStatRow(statsPage, 92, "Net so far"),
+	perSec = createStatRow(statsPage, 124, "Per second"),
+	perMin = createStatRow(statsPage, 148, "Per minute"),
+	perHour = createStatRow(statsPage, 172, "Per hour"),
+	perDay = createStatRow(statsPage, 196, "Per day"),
+}
 
 local function refreshStatsUI()
 	local elapsed = tick() - StatsStartTime
-	elapsedValue.Text = formatElapsed(elapsed)
+	StatValue.elapsed.Text = formatElapsed(elapsed)
 
 	if not StatsStartingSheckles then
 		if SheckleSearchFailed then
@@ -3196,28 +3301,28 @@ local function refreshStatsUI()
 			statsStatusLabel.Text = "Detecting game data..."
 			statsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
 		end
-		earnedValue.Text = "—"
-		spentValue.Text = "—"
-		netValue.Text = "—"
-		perSecValue.Text = "—"
-		perMinValue.Text = "—"
-		perHourValue.Text = "—"
-		perDayValue.Text = "—"
+		StatValue.earned.Text = "—"
+		StatValue.spent.Text = "—"
+		StatValue.net.Text = "—"
+		StatValue.perSec.Text = "—"
+		StatValue.perMin.Text = "—"
+		StatValue.perHour.Text = "—"
+		StatValue.perDay.Text = "—"
 		return
 	end
 
 	statsStatusLabel.Text = "Tracking · " .. tostring(sheckleSource or "?")
 	statsStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
 
-	earnedValue.Text = formatNumber(TotalEarned)
-	earnedValue.TextColor3 = Color3.fromRGB(120, 255, 170)
+	StatValue.earned.Text = formatNumber(TotalEarned)
+	StatValue.earned.TextColor3 = Color3.fromRGB(120, 255, 170)
 
-	spentValue.Text = formatNumber(TotalSpent)
-	spentValue.TextColor3 = Color3.fromRGB(255, 140, 140)
+	StatValue.spent.Text = formatNumber(TotalSpent)
+	StatValue.spent.TextColor3 = Color3.fromRGB(255, 140, 140)
 
 	local net = TotalEarned - TotalSpent
-	netValue.Text = formatNumber(net)
-	netValue.TextColor3 = net >= 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
+	StatValue.net.Text = formatNumber(net)
+	StatValue.net.TextColor3 = net >= 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
 
 	-- Small rates need decimals: formatNumber rounds to whole Sheckles,
 	-- so a real per-second rate of 0.4 was displaying as a flat 0 and
@@ -3230,10 +3335,10 @@ local function refreshStatsUI()
 	end
 
 	local rate = elapsed > 0 and (net / elapsed) or 0
-	perSecValue.Text = formatRate(rate)
-	perMinValue.Text = formatRate(rate * 60)
-	perHourValue.Text = formatRate(rate * 3600)
-	perDayValue.Text = formatRate(rate * 86400)
+	StatValue.perSec.Text = formatRate(rate)
+	StatValue.perMin.Text = formatRate(rate * 60)
+	StatValue.perHour.Text = formatRate(rate * 3600)
+	StatValue.perDay.Text = formatRate(rate * 86400)
 end
 
 -- Sampling runs every frame, NOT on the UI's refresh interval.
@@ -3398,6 +3503,10 @@ do
 
 		SellEnabled = switch("sellEnabled", config.sellEnabled, SellEnabled)
 		SellInterval = slider("sellInterval", config.sellInterval, SellInterval, 0.001, 10)
+		Sell.threshold = slider("sellThreshold", config.sellThreshold, Sell.threshold, 1, 200)
+		if (config.sellMode == "delay" or config.sellMode == "count") and config.sellMode ~= Sell.mode then
+			if RemoteRepaint.sellMode then RemoteRepaint.sellMode(config.sellMode) end
+		end
 
 		CollectEnabled = switch("collectEnabled", config.collectEnabled, CollectEnabled)
 		CollectEverything = switch("collectEverything", config.collectEverything, CollectEverything)
@@ -3479,6 +3588,8 @@ do
 				harvestInterval = HarvestInterval,
 				sellEnabled = SellEnabled,
 				sellInterval = SellInterval,
+				sellThreshold = Sell.threshold,
+				sellMode = Sell.mode,
 				collectEnabled = CollectEnabled,
 				collectEverything = CollectEverything,
 				collectReturn = CollectReturn,
@@ -3586,9 +3697,8 @@ end
 -- and this panel are 2D, so switching off the world leaves everything
 -- you actually watch while farming, at a fraction of the cost.
 --========================================================
-local LowPower = false
-
 do
+	local LowPower = false
 	local RunService = game:GetService("RunService")
 
 	local perfGui = Instance.new("ScreenGui")
@@ -3814,6 +3924,8 @@ do
 			harvestInterval = HarvestInterval,
 			sellEnabled = SellEnabled,
 			sellInterval = SellInterval,
+			sellMode = Sell.mode,
+			sellThreshold = Sell.threshold,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
 			collectReturn = CollectReturn,
@@ -3860,6 +3972,9 @@ do
 			pcall(RemoteRepaint.shovel)
 		end
 
+		if saved.sellMode and RemoteRepaint.sellMode then
+			pcall(RemoteRepaint.sellMode, saved.sellMode)
+		end
 		if saved.plantMode and RemoteRepaint.plantMode then
 			pcall(RemoteRepaint.plantMode, saved.plantMode)
 		end

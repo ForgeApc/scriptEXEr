@@ -1673,7 +1673,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 420, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 460, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -3580,6 +3580,9 @@ do
 		if type(config.rejoinAuto) == "boolean" and RemoteWidgets.rejoinAuto then
 			RemoteWidgets.rejoinAuto(config.rejoinAuto)
 		end
+		if type(config.rejoinRam) == "number" and RemoteWidgets.rejoinRam then
+			RemoteWidgets.rejoinRam(config.rejoinRam)
+		end
 		if type(config.rejoinFps) == "number" and RemoteWidgets.rejoinFps then
 			RemoteWidgets.rejoinFps(config.rejoinFps)
 		end
@@ -3671,6 +3674,8 @@ do
 				rejoinAuto = Rejoin.auto,
 				rejoinLimit = Rejoin.limitMb,
 				rejoinFps = Rejoin.fpsFloor,
+			rejoinRam = Rejoin.ramGb,
+				rejoinRam = Rejoin.ramGb,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3887,13 +3892,18 @@ do
 		if RemoteWidgets.rejoinAuto then RemoteWidgets.rejoinAuto(false) end
 	end))
 
-	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 356, "Or under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
+	-- Typed, not dragged: you know this number, and 0 means work it out.
+	RemoteWidgets.rejoinRam = select(2, createSlider(statsPage, 356, "My device RAM (0 = work it out)", 0, 32, Rejoin.ramGb, " GB", function(v)
+		Rejoin.ramGb = math.max(0, v)
+	end))
+
+	RemoteWidgets.rejoinFps = select(2, createSlider(statsPage, 400, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
 		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
 	end))
 
 	local rejoinNote = Instance.new("TextLabel")
 	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 398)
+	rejoinNote.Position = UDim2.new(0, 16, 0, 440)
 	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
 	rejoinNote.Font = Enum.Font.Gotham
 	rejoinNote.Text = ""
@@ -4209,7 +4219,8 @@ local Rejoin = {
 	auto = true, -- work the limit out from this device rather than a number you pick
 	limitMb = 3000, -- used when auto is off
 	mb = 0,
-	fpsFloor = 12, -- sustained frames per second below this counts as dying
+	ramGb = 0, -- your device's RAM, if you tell it; 0 means work it out
+	fpsFloor = 12, -- sustained frames per second below this counts as struggling
 	peakMb = 0, -- highest this session
 	ceilingMb = 0, -- highest ever seen on this device, across sessions
 	status = "off",
@@ -4247,6 +4258,13 @@ do
 	end
 
 	local function autoLimit()
+		-- If you've told it how much RAM the device has, that beats
+		-- anything it could infer: a real number about the machine
+		-- rather than the highest figure it happens to have survived.
+		if Rejoin.ramGb and Rejoin.ramGb > 0 then
+			return math.max(FLOOR_MB, Rejoin.ramGb * 1024 * CEILING_FRACTION)
+		end
+
 		local ceiling = Rejoin.ceilingMb
 		if ceiling <= 0 then
 			-- Nothing learned yet. Sit above the floor and let the first
@@ -4290,6 +4308,10 @@ do
 		-- Give the settings writer a moment to flush the current state.
 		task.wait(1.5)
 
+		-- The world you're in is its own place — Garden Valley, Fall
+		-- Harvest, Maple and so on all have different PlaceIds. Read at
+		-- teleport time, so a rejoin puts you back where you were farming
+		-- rather than in the default world.
 		local ok = pcall(function()
 			TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
 		end)
@@ -4319,6 +4341,9 @@ do
 			end
 
 			local limit = Rejoin.auto and autoLimit() or Rejoin.limitMb
+			if struggling then
+				limit = limit * 0.9
+			end
 
 			-- Memory is the clearest signal but not the only one: a client
 			-- can be dying on frame time while memory looks unremarkable,
@@ -4331,16 +4356,16 @@ do
 			else
 				slowSince = nil
 			end
-			local crawling = slowSince ~= nil and (tick() - slowSince) >= 30
+			-- A small factor by design. A struggling frame rate pulls the
+			-- memory limit down by a tenth rather than forcing a rejoin
+			-- on its own: frame rate dips for all sorts of innocent
+			-- reasons, memory only goes one way.
+			local struggling = slowSince ~= nil and (tick() - slowSince) >= 30
 
 			if not Rejoin.enabled then
 				Rejoin.status = "off"
 				overSince = nil
 				slowSince = nil
-			elseif crawling then
-				Rejoin.status = string.format("%d fps for 30s — rejoining", fps)
-				rejoin()
-				return
 			elseif Rejoin.mb >= limit then
 				-- Held for fifteen seconds before acting: memory spikes
 				-- during loading and settles, and rejoining on a spike
@@ -4354,11 +4379,11 @@ do
 			else
 				overSince = nil
 				Rejoin.status = string.format(
-					"%.0fMB · %s · rejoins at %.0fMB or under %d fps%s",
+					"%.0fMB · %s · rejoins at %.0fMB%s%s",
 					Rejoin.mb,
 					fps and (fps .. " fps") or "fps unknown",
 					limit,
-					Rejoin.fpsFloor,
+					struggling and " (lowered — frame rate is struggling)" or "",
 					Rejoin.auto and (" (70%% of " .. string.format("%.0f", math.max(Rejoin.ceilingMb, limit / CEILING_FRACTION)) .. "MB seen)") or ""
 				)
 			end

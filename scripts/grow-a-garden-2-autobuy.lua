@@ -583,14 +583,21 @@ local function harvestOne(target)
 	end
 end
 
-local HarvestEnabled = false
-local HarvestInterval = 0.5
+local Harvest = {
+	enabled = false,
+	interval = 0.5,
+	biggest = false, -- work down from the heaviest fruit instead of plot order
+}
 
 task.spawn(function()
 	-- Ripe first, still-growing after — as two passes rather than a sort.
 	-- table.sort calls the comparator O(n log n) times and each call read
 	-- two attributes off both plants; on a large garden that alone was
 	-- tens of thousands of property reads per scan.
+	--
+	-- With "biggest first" on, each group is then sorted by weight. The
+	-- size is read once per fruit into a lookup rather than inside the
+	-- comparator, for exactly the reason above.
 	local function orderHarvestTargets(targets)
 		local ripe, growing = {}, {}
 		for _, target in ipairs(targets) do
@@ -600,6 +607,23 @@ task.spawn(function()
 				table.insert(growing, target)
 			end
 		end
+
+		if Harvest.biggest then
+			local size = {}
+			for _, target in ipairs(targets) do
+				local ok, value = pcall(function()
+					return target:GetAttribute("SizeMulti")
+				end)
+				size[target] = (ok and type(value) == "number") and value or 0
+			end
+
+			local function heaviestFirst(a, b)
+				return (size[a] or 0) > (size[b] or 0)
+			end
+			table.sort(ripe, heaviestFirst)
+			table.sort(growing, heaviestFirst)
+		end
+
 		for _, target in ipairs(growing) do
 			table.insert(ripe, target)
 		end
@@ -620,8 +644,8 @@ task.spawn(function()
 	local BATCH = 40
 	local cachedTargets, cachedAt, cursor = {}, 0, 1
 
-	while task.wait(HarvestInterval) do
-		if HarvestEnabled and OwnerPlot then
+	while task.wait(Harvest.interval) do
+		if Harvest.enabled and OwnerPlot then
 			if tick() - cachedAt > 1 then
 				cachedTargets = orderHarvestTargets(getHarvestTargets())
 				cachedAt = tick()
@@ -2876,8 +2900,8 @@ end)
 --========================================================
 local harvestPage = pages.Harvest
 
-RemoteWidgets.harvestEnabled = select(2, createToggleRow(harvestPage, 0, "Enable Auto Harvest", HarvestEnabled, function(state)
-	HarvestEnabled = state
+RemoteWidgets.harvestEnabled = select(2, createToggleRow(harvestPage, 0, "Enable Auto Harvest", Harvest.enabled, function(state)
+	Harvest.enabled = state
 end))
 
 local harvestNote = Instance.new("TextLabel")
@@ -2907,8 +2931,12 @@ task.spawn(function()
 	end
 end)
 
-RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
-	HarvestInterval = v
+RemoteWidgets.harvestBiggest = select(2, createToggleRow(harvestPage, 66, "Biggest fruit first", Harvest.biggest, function(state)
+	Harvest.biggest = state
+end))
+
+RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 96, "Harvest delay", 0.001, 10, Harvest.interval, "s", function(v)
+	Harvest.interval = v
 end))
 
 -- Exclusion list. Everything is harvested by default; ticking a crop
@@ -2916,7 +2944,7 @@ end))
 do
 	local excludeNote = Instance.new("TextLabel")
 	excludeNote.BackgroundTransparency = 1
-	excludeNote.Position = UDim2.new(0, 16, 0, 116)
+	excludeNote.Position = UDim2.new(0, 16, 0, 140)
 	excludeNote.Size = UDim2.new(1, -32, 0, 16)
 	excludeNote.Font = Enum.Font.Gotham
 	excludeNote.Text = "Don't harvest these:"
@@ -2927,7 +2955,7 @@ do
 
 	local bulkRow = Instance.new("Frame")
 	bulkRow.BackgroundTransparency = 1
-	bulkRow.Position = UDim2.new(0, 16, 0, 136)
+	bulkRow.Position = UDim2.new(0, 16, 0, 160)
 	bulkRow.Size = UDim2.new(1, -32, 0, 24)
 	bulkRow.Parent = harvestPage
 
@@ -3557,8 +3585,9 @@ do
 		PlantEnabled = switch("plantEnabled", config.plantEnabled, PlantEnabled)
 		PlantInterval = slider("plantInterval", config.plantInterval, PlantInterval, 0.001, 10)
 
-		HarvestEnabled = switch("harvestEnabled", config.harvestEnabled, HarvestEnabled)
-		HarvestInterval = slider("harvestInterval", config.harvestInterval, HarvestInterval, 0.001, 10)
+		Harvest.enabled = switch("harvestEnabled", config.harvestEnabled, Harvest.enabled)
+		Harvest.interval = slider("harvestInterval", config.harvestInterval, Harvest.interval, 0.001, 10)
+		Harvest.biggest = switch("harvestBiggest", config.harvestBiggest, Harvest.biggest)
 
 		SellEnabled = switch("sellEnabled", config.sellEnabled, SellEnabled)
 		SellInterval = slider("sellInterval", config.sellInterval, SellInterval, 0.001, 10)
@@ -3653,7 +3682,7 @@ do
 			lastSeed = PlantLastFired,
 			bought = BuyFiredCount,
 			plantEnabled = PlantEnabled,
-			harvestEnabled = HarvestEnabled,
+			harvestEnabled = Harvest.enabled,
 			sellEnabled = SellEnabled,
 			collectEnabled = CollectEnabled,
 			statsReady = StatsStartingSheckles ~= nil,
@@ -3671,8 +3700,10 @@ do
 				buyInterval = BuyInterval,
 				plantEnabled = PlantEnabled,
 				plantInterval = PlantInterval,
-				harvestEnabled = HarvestEnabled,
-				harvestInterval = HarvestInterval,
+				harvestEnabled = Harvest.enabled,
+				harvestInterval = Harvest.interval,
+			harvestBiggest = Harvest.biggest,
+				harvestBiggest = Harvest.biggest,
 				sellEnabled = SellEnabled,
 				sellInterval = SellInterval,
 				sellThreshold = Sell.threshold,
@@ -4110,8 +4141,8 @@ do
 			plantEnabled = PlantEnabled,
 			plantInterval = PlantInterval,
 			plantMode = PlantMode,
-			harvestEnabled = HarvestEnabled,
-			harvestInterval = HarvestInterval,
+			harvestEnabled = Harvest.enabled,
+			harvestInterval = Harvest.interval,
 			sellEnabled = SellEnabled,
 			sellInterval = SellInterval,
 			sellMode = Sell.mode,

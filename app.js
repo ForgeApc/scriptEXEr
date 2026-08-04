@@ -897,6 +897,7 @@ runScript(toRun)
       controls: [
         { key: "harvestEnabled", label: "Enable Auto Harvest", type: "toggle" },
         { note: "Harvests ripe crops first, then attempts still-growing ones too." },
+        { key: "harvestBiggest", label: "Biggest fruit first", type: "toggle" },
         { key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
       list: "harvest",

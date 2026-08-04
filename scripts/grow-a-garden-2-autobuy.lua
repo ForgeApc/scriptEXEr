@@ -21,16 +21,35 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
-local Networking = require(ReplicatedStorage.SharedModules.Networking)
+-- Run from an autoexec folder, this starts before the game has finished
+-- replicating: SharedModules and StockValues simply aren't there yet, and
+-- indexing them threw before anything was built. That's why launching
+-- with the game stopped working while running it by hand still did — by
+-- then everything had arrived.
+--
+-- Waiting first costs nothing on a manual run, where all of this
+-- resolves immediately.
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+while not Players.LocalPlayer do
+	task.wait()
+end
+
+local Networking = require(
+	ReplicatedStorage:WaitForChild("SharedModules", 120):WaitForChild("Networking", 120)
+)
 
 local PurchaseSeeds = Networking.SeedShop.PurchaseSeed
-local SeedsStock = ReplicatedStorage.StockValues.SeedShop.Items
+local SeedsStock = ReplicatedStorage:WaitForChild("StockValues", 120)
+	:WaitForChild("SeedShop", 120)
+	:WaitForChild("Items", 120)
 
 local PurchaseGears = Networking.GearShop.PurchaseGear
-local GearsStock = ReplicatedStorage.StockValues.GearShop.Items
+local GearsStock = ReplicatedStorage.StockValues:WaitForChild("GearShop", 120):WaitForChild("Items", 120)
 
 local PurchaseCrates = Networking.CrateShop.PurchaseCrate
-local CratesStock = ReplicatedStorage.StockValues.CrateShop.Items
+local CratesStock = ReplicatedStorage.StockValues:WaitForChild("CrateShop", 120):WaitForChild("Items", 120)
 
 local CollectFruit = Networking.Garden.CollectFruit
 local SellAll = Networking.NPCS.SellAll

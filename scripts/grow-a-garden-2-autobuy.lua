@@ -40,6 +40,46 @@ local Networking = require(
 	ReplicatedStorage:WaitForChild("SharedModules", 120):WaitForChild("Networking", 120)
 )
 
+--========================================================
+-- SURVIVING A HOP
+--
+-- A teleport — switching servers, changing worlds, being sent anywhere —
+-- kills every running script, and the executor's autoexec doesn't fire
+-- for it, because it isn't a fresh launch. queue_on_teleport runs this
+-- again on the other side.
+--
+-- Armed here, at the top, rather than at the end of the file: anything
+-- that throws further down would otherwise leave the queue empty and the
+-- script simply wouldn't come back. Re-armed periodically too, since
+-- some executors clear the queue once it fires.
+--========================================================
+do
+	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
+	-- The flag tells the copy on the other side it has loading gates to
+	-- hold through.
+	local LINE = 'getgenv().SCRIPTEXER_REJOINED = true\n'
+		.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
+
+	local function arm()
+		local queue = queue_on_teleport
+			or (syn and syn.queue_on_teleport)
+			or (fluxus and fluxus.queue_on_teleport)
+		if type(queue) == "function" then
+			pcall(queue, LINE)
+			return true
+		end
+		return false
+	end
+
+	if arm() then
+		task.spawn(function()
+			while task.wait(30) do
+				arm()
+			end
+		end)
+	end
+end
+
 local PurchaseSeeds = Networking.SeedShop.PurchaseSeed
 local SeedsStock = ReplicatedStorage:WaitForChild("StockValues", 120)
 	:WaitForChild("SeedShop", 120)
@@ -4142,28 +4182,6 @@ do
 	end)
 end
 
---========================================================
--- SURVIVING A REJOIN
---
--- Only the executor can run something the moment a game starts (its
--- autoexec folder), but a teleport or server hop is not a fresh start —
--- it kills every script without touching autoexec. queue_on_teleport
--- runs this again on the other side, so switching servers, hopping, or
--- being sent to another world brings the panel straight back with your
--- saved settings already applied.
---========================================================
-do
-	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
-	local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
-
-	if type(queue) == "function" then
-		pcall(
-			queue,
-			'getgenv().SCRIPTEXER_REJOINED = true\n'
-				.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
-		)
-	end
-end
 
 --========================================================
 -- REJOIN BEFORE THE CLIENT DIES

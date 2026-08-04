@@ -4226,15 +4226,21 @@ do
 end
 
 --========================================================
--- THROUGH THE LOADING GATE
+-- THROUGH THE LOADING GATES
 --
--- Rejoining drops you on a screen you have to hold to get past, and
--- then a second one after the world loads. Nothing else in the script
--- matters if it's sitting behind those, so the copy that wakes up after
--- a rejoin holds through them itself.
+-- A rejoin doesn't land you in the game: there's a screen to hold past,
+-- then another once the world loads, then the "what your garden became
+-- while you were away" summary. Nothing else in the script matters if
+-- it's sitting behind those.
 --
--- Only after a rejoin: doing this on a normal manual run would press
--- the screen while you're using it.
+-- Rather than time each gate exactly — they take different amounts of
+-- time depending on how long you were gone and how big the farm is —
+-- this just holds the screen in eight second presses with a second
+-- between them, for about a minute and three quarters. Extra presses
+-- once you're through land on the world and do nothing.
+--
+-- Only after a rejoin: doing this on a normal manual run would press the
+-- screen while you're using it.
 --========================================================
 if getgenv and getgenv().SCRIPTEXER_REJOINED then
 	getgenv().SCRIPTEXER_REJOINED = false
@@ -4244,31 +4250,29 @@ if getgenv and getgenv().SCRIPTEXER_REJOINED then
 		pcall(function() VIM = game:GetService("VirtualInputManager") end)
 		if not VIM then return end
 
-		local function holdScreen(seconds)
+		local function press(down)
 			local camera = Workspace.CurrentCamera
 			local size = camera and camera.ViewportSize or Vector2.new(800, 600)
-			local x, y = size.X / 2, size.Y / 2
-
 			pcall(function()
-				VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-			end)
-			task.wait(seconds)
-			pcall(function()
-				VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+				VIM:SendMouseButtonEvent(size.X / 2, size.Y / 2, 0, down, game, 0)
 			end)
 		end
 
-		-- Wait for the client to be up before pressing anything.
+		-- Don't press anything before the client is up.
 		if not game:IsLoaded() then
 			game.Loaded:Wait()
 		end
 		task.wait(2)
 
-		holdScreen(3)
+		local deadline = tick() + 105
+		while tick() < deadline do
+			press(true)
+			task.wait(8)
+			press(false)
+			task.wait(1)
+		end
 
-		-- The world loads between the two gates; three seconds is the
-		-- hold, the wait after it is the load.
-		task.wait(3)
-		holdScreen(3)
+		-- Never leave the button stuck down if the loop is interrupted.
+		press(false)
 	end)
 end

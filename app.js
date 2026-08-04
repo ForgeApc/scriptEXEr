@@ -897,7 +897,6 @@ runScript(toRun)
       controls: [
         { key: "harvestEnabled", label: "Enable Auto Harvest", type: "toggle" },
         { note: "Harvests ripe crops first, then attempts still-growing ones too." },
-        { key: "harvestBiggest", label: "Biggest fruit first", type: "toggle" },
         { key: "harvestInterval", label: "Harvest delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
       ],
       list: "harvest",
@@ -907,23 +906,12 @@ runScript(toRun)
       controls: [
         { key: "sellEnabled", label: "Enable Auto Sell", type: "toggle" },
         { key: "sellInterval", label: "Sell delay", type: "slider", min: 0.001, max: 10, step: 0.001, unit: "s" },
-        { key: "sellThreshold", label: "Sell when carrying", type: "slider", min: 1, max: 200, step: 1, unit: " crops" },
-        { note: "Trigger is picked in game: on the delay, or when the bag hits the count." },
       ],
     },
-    { name: "Stats", stats: true },
     {
-      name: "Health",
-      controls: [
-        { key: "lowPower", label: "Low power (stop drawing the world)", type: "toggle" },
-        { key: "rejoinEnabled", label: "Rejoin before the client dies", type: "toggle" },
-        { key: "rejoinRam", label: "My device RAM (0 = auto)", type: "slider", min: 0, max: 32, step: 1, unit: " GB" },
-        { key: "rejoinPercent", label: "Rejoin at", type: "slider", min: 10, max: 95, step: 1, unit: "%" },
-        { key: "rejoinFps", label: "Nudge down under", type: "slider", min: 1, max: 30, step: 1, unit: " fps" },
-        { key: "rejoinNudge", label: "Lower it by", type: "slider", min: 0, max: 50, step: 1, unit: "%" },
-        { key: "rejoinMemHold", label: "Memory must hold for", type: "slider", min: 5, max: 120, step: 1, unit: "s" },
-        { key: "rejoinFpsHold", label: "Low fps must hold for", type: "slider", min: 5, max: 300, step: 5, unit: "s" },
-      ],
+      name: "Stats",
+      stats: true,
+      controls: [{ key: "lowPower", label: "Low power (stop drawing the world)", type: "toggle" }],
     },
     { name: "Presets", presets: true },
   ];
@@ -975,8 +963,6 @@ runScript(toRun)
     const s = status || {};
     const rate = typeof s.perSecond === "number" ? s.perSecond : null;
     const rows = [
-      ["Memory", typeof s.memoryMb === "number" ? Math.round(s.memoryMb) + " MB" : "—", ""],
-      ["Highest seen", typeof s.memoryCeilingMb === "number" && s.memoryCeilingMb > 0 ? Math.round(s.memoryCeilingMb) + " MB" : "—", ""],
       ["FPS", typeof s.fps === "number" ? String(s.fps) : "—", s.fps >= 45 ? "good" : s.fps >= 20 ? "" : "bad"],
       ["Elapsed time", hudElapsed(s.elapsed), ""],
       ["Earned so far", hudNumber(s.earned), "good"],

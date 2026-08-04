@@ -21,75 +21,16 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
--- Run from an autoexec folder, this starts before the game has finished
--- replicating: SharedModules and StockValues simply aren't there yet, and
--- indexing them threw before anything was built. That's why launching
--- with the game stopped working while running it by hand still did — by
--- then everything had arrived.
---
--- Waiting first costs nothing on a manual run, where all of this
--- resolves immediately.
-if not game:IsLoaded() then
-	game.Loaded:Wait()
-end
-while not Players.LocalPlayer do
-	task.wait()
-end
-
-local Networking = require(
-	ReplicatedStorage:WaitForChild("SharedModules", 120):WaitForChild("Networking", 120)
-)
-
---========================================================
--- SURVIVING A HOP
---
--- A teleport — switching servers, changing worlds, being sent anywhere —
--- kills every running script, and the executor's autoexec doesn't fire
--- for it, because it isn't a fresh launch. queue_on_teleport runs this
--- again on the other side.
---
--- Armed here, at the top, rather than at the end of the file: anything
--- that throws further down would otherwise leave the queue empty and the
--- script simply wouldn't come back. Re-armed periodically too, since
--- some executors clear the queue once it fires.
---========================================================
-do
-	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
-	-- The flag tells the copy on the other side it has loading gates to
-	-- hold through.
-	local LINE = 'getgenv().SCRIPTEXER_REJOINED = true\n'
-		.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
-
-	local function arm()
-		local queue = queue_on_teleport
-			or (syn and syn.queue_on_teleport)
-			or (fluxus and fluxus.queue_on_teleport)
-		if type(queue) == "function" then
-			pcall(queue, LINE)
-			return true
-		end
-		return false
-	end
-
-	if arm() then
-		task.spawn(function()
-			while task.wait(30) do
-				arm()
-			end
-		end)
-	end
-end
+local Networking = require(ReplicatedStorage.SharedModules.Networking)
 
 local PurchaseSeeds = Networking.SeedShop.PurchaseSeed
-local SeedsStock = ReplicatedStorage:WaitForChild("StockValues", 120)
-	:WaitForChild("SeedShop", 120)
-	:WaitForChild("Items", 120)
+local SeedsStock = ReplicatedStorage.StockValues.SeedShop.Items
 
 local PurchaseGears = Networking.GearShop.PurchaseGear
-local GearsStock = ReplicatedStorage.StockValues:WaitForChild("GearShop", 120):WaitForChild("Items", 120)
+local GearsStock = ReplicatedStorage.StockValues.GearShop.Items
 
 local PurchaseCrates = Networking.CrateShop.PurchaseCrate
-local CratesStock = ReplicatedStorage.StockValues:WaitForChild("CrateShop", 120):WaitForChild("Items", 120)
+local CratesStock = ReplicatedStorage.StockValues.CrateShop.Items
 
 local CollectFruit = Networking.Garden.CollectFruit
 local SellAll = Networking.NPCS.SellAll
@@ -583,21 +524,14 @@ local function harvestOne(target)
 	end
 end
 
-local Harvest = {
-	enabled = false,
-	interval = 0.5,
-	biggest = false, -- work down from the heaviest fruit instead of plot order
-}
+local HarvestEnabled = false
+local HarvestInterval = 0.5
 
 task.spawn(function()
 	-- Ripe first, still-growing after — as two passes rather than a sort.
 	-- table.sort calls the comparator O(n log n) times and each call read
 	-- two attributes off both plants; on a large garden that alone was
 	-- tens of thousands of property reads per scan.
-	--
-	-- With "biggest first" on, each group is then sorted by weight. The
-	-- size is read once per fruit into a lookup rather than inside the
-	-- comparator, for exactly the reason above.
 	local function orderHarvestTargets(targets)
 		local ripe, growing = {}, {}
 		for _, target in ipairs(targets) do
@@ -607,23 +541,6 @@ task.spawn(function()
 				table.insert(growing, target)
 			end
 		end
-
-		if Harvest.biggest then
-			local size = {}
-			for _, target in ipairs(targets) do
-				local ok, value = pcall(function()
-					return target:GetAttribute("SizeMulti")
-				end)
-				size[target] = (ok and type(value) == "number") and value or 0
-			end
-
-			local function heaviestFirst(a, b)
-				return (size[a] or 0) > (size[b] or 0)
-			end
-			table.sort(ripe, heaviestFirst)
-			table.sort(growing, heaviestFirst)
-		end
-
 		for _, target in ipairs(growing) do
 			table.insert(ripe, target)
 		end
@@ -644,8 +561,8 @@ task.spawn(function()
 	local BATCH = 40
 	local cachedTargets, cachedAt, cursor = {}, 0, 1
 
-	while task.wait(Harvest.interval) do
-		if Harvest.enabled and OwnerPlot then
+	while task.wait(HarvestInterval) do
+		if HarvestEnabled and OwnerPlot then
 			if tick() - cachedAt > 1 then
 				cachedTargets = orderHarvestTargets(getHarvestTargets())
 				cachedAt = tick()
@@ -1493,54 +1410,23 @@ local function triggerPrompt(prompt)
 	end
 end
 
--- Keeps at it until the drop is genuinely gone.
---
--- One trigger and a hopeful "true" was wrong in both directions: a
--- pickup that failed - out of range for a frame, prompt not ready, item
--- still falling - counted as collected and was never retried, and the
--- counter was really counting attempts rather than items.
---
--- The item disappearing is the only honest confirmation, so it teleports
--- and triggers repeatedly until that happens or the deadline passes.
 local function collectDrop(prompt)
 	if not prompt or not prompt.Parent then return false end
 	local root = Drop.getRoot()
 	if not root then return false end
+	local position = promptPosition(prompt)
+	if not position then return false end
 
 	local origin = root.CFrame
-	local deadline = tick() + 3
-	local collected = false
-
-	while tick() < deadline do
-		if not prompt.Parent then
-			collected = true
-			break
-		end
-
-		-- Re-read the position every pass: dropped items bounce and roll,
-		-- and teleporting to where it was is how a pickup misses.
-		local position = promptPosition(prompt)
-		if not position then break end
-
-		local rootNow = Drop.getRoot()
-		if not rootNow then break end
-		rootNow.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
-
-		task.wait(CollectDwell)
-		triggerPrompt(prompt)
-		task.wait(0.05)
-
-		if not prompt.Parent then
-			collected = true
-			break
-		end
-	end
+	root.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+	task.wait(CollectDwell)
+	triggerPrompt(prompt)
 
 	if CollectReturn then
 		local rootNow = Drop.getRoot()
 		if rootNow then rootNow.CFrame = origin end
 	end
-	return collected
+	return true
 end
 
 Workspace.DescendantAdded:Connect(function(inst)
@@ -1606,10 +1492,6 @@ task.spawn(function()
 			if ok and collected then
 				CollectedCount += 1
 				CollectLast = name
-			elseif target and target.Parent then
-				-- Still lying there: back on the queue rather than lost.
-				-- The end, so one stubborn item can't block the rest.
-				table.insert(CollectPending, target)
 			end
 		elseif #CollectPending > 0 then
 			-- Disabled mid-queue; don't teleport to stale targets later.
@@ -1623,44 +1505,11 @@ end)
 --========================================================
 local SellEnabled = false
 local SellInterval = 0.5
--- Two ways to trigger a sale, because a timer and a full bag want
--- different things: "delay" fires on the clock, "count" waits until you
--- are actually carrying enough to be worth a trip. One table, not three
--- locals: the main chunk is at Lua's 200-locals ceiling.
-local Sell = { mode = "delay", threshold = 20, carrying = 0 }
-
--- Harvested produce carries its weight in the tool name — "Maple
--- Strawberry [1.97kg]" — which is what separates a crop you can sell
--- from a seed, a gear or the shovel.
-function Sell.count()
-	local player = Players.LocalPlayer
-	local total = 0
-
-	local function tally(container)
-		if not container then return end
-		for _, tool in ipairs(container:GetChildren()) do
-			if tool:IsA("Tool") and tool.Name:find("%[") and tool.Name:lower():find("kg") then
-				total += 1
-			end
-		end
-	end
-
-	tally(player.Character)
-	tally(player:FindFirstChildOfClass("Backpack"))
-	return total
-end
 
 task.spawn(function()
 	while task.wait(SellInterval) do
 		if SellEnabled then
-			if Sell.mode == "count" then
-				Sell.carrying = Sell.count()
-				if Sell.carrying >= Sell.threshold then
-					SellAll:Fire()
-				end
-			else
-				SellAll:Fire()
-			end
+			SellAll:Fire()
 		end
 	end
 end)
@@ -1697,7 +1546,7 @@ gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
 
-local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 200, Stats = 232, Health = 386, Shovel = 506 }
+local PAGE_HEIGHTS = { Buy = 520, Plant = 506, Drops = 502, Harvest = 506, Sell = 90, Stats = 268, Shovel = 506 }
 local TOP_OFFSET = 74 -- title + top tab bar
 
 local frame = Instance.new("Frame")
@@ -2081,7 +1930,7 @@ topTabLayout.FillDirection = Enum.FillDirection.Horizontal
 topTabLayout.Padding = UDim.new(0, 4)
 topTabLayout.Parent = topTabBar
 
-local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats", "Health" }
+local pageOrder = { "Buy", "Plant", "Shovel", "Drops", "Harvest", "Sell", "Stats" }
 local pages = {}
 local topTabButtons = {}
 local activePage = "Buy"
@@ -2104,8 +1953,8 @@ local function setActivePage(name)
 end
 
 for _, key in ipairs(pageOrder) do
-	-- 8 tabs across a 388px inner width with 4px gaps.
-	local btn = pillButton(topTabBar, key, 44)
+	-- 7 tabs across a 388px inner width with 4px gaps.
+	local btn = pillButton(topTabBar, key, 51)
 	btn.TextSize = 10
 	topTabButtons[key] = btn
 	btn.MouseButton1Click:Connect(function()
@@ -2900,8 +2749,8 @@ end)
 --========================================================
 local harvestPage = pages.Harvest
 
-RemoteWidgets.harvestEnabled = select(2, createToggleRow(harvestPage, 0, "Enable Auto Harvest", Harvest.enabled, function(state)
-	Harvest.enabled = state
+RemoteWidgets.harvestEnabled = select(2, createToggleRow(harvestPage, 0, "Enable Auto Harvest", HarvestEnabled, function(state)
+	HarvestEnabled = state
 end))
 
 local harvestNote = Instance.new("TextLabel")
@@ -2931,12 +2780,8 @@ task.spawn(function()
 	end
 end)
 
-RemoteWidgets.harvestBiggest = select(2, createToggleRow(harvestPage, 66, "Biggest fruit first", Harvest.biggest, function(state)
-	Harvest.biggest = state
-end))
-
-RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 96, "Harvest delay", 0.001, 10, Harvest.interval, "s", function(v)
-	Harvest.interval = v
+RemoteWidgets.harvestInterval = select(2, createSlider(harvestPage, 76, "Harvest delay", 0.001, 10, HarvestInterval, "s", function(v)
+	HarvestInterval = v
 end))
 
 -- Exclusion list. Everything is harvested by default; ticking a crop
@@ -2944,7 +2789,7 @@ end))
 do
 	local excludeNote = Instance.new("TextLabel")
 	excludeNote.BackgroundTransparency = 1
-	excludeNote.Position = UDim2.new(0, 16, 0, 140)
+	excludeNote.Position = UDim2.new(0, 16, 0, 116)
 	excludeNote.Size = UDim2.new(1, -32, 0, 16)
 	excludeNote.Font = Enum.Font.Gotham
 	excludeNote.Text = "Don't harvest these:"
@@ -2955,7 +2800,7 @@ do
 
 	local bulkRow = Instance.new("Frame")
 	bulkRow.BackgroundTransparency = 1
-	bulkRow.Position = UDim2.new(0, 16, 0, 160)
+	bulkRow.Position = UDim2.new(0, 16, 0, 136)
 	bulkRow.Size = UDim2.new(1, -32, 0, 24)
 	bulkRow.Parent = harvestPage
 
@@ -3276,74 +3121,6 @@ RemoteWidgets.sellInterval = select(2, createSlider(sellPage, 36, "Sell delay", 
 	SellInterval = v
 end))
 
-do
-	-- Trigger picker. In count mode the delay above becomes how often it
-	-- checks your bag rather than how often it sells.
-	local modeRow = Instance.new("Frame")
-	modeRow.BackgroundTransparency = 1
-	modeRow.Position = UDim2.new(0, 16, 0, 80)
-	modeRow.Size = UDim2.new(1, -32, 0, 26)
-	modeRow.Parent = sellPage
-
-	local modeLayout = Instance.new("UIListLayout")
-	modeLayout.FillDirection = Enum.FillDirection.Horizontal
-	modeLayout.Padding = UDim.new(0, 8)
-	modeLayout.Parent = modeRow
-
-	local buttons = {}
-	local function paint()
-		for key, btn in pairs(buttons) do
-			local on = key == Sell.mode
-			btn.BackgroundTransparency = on and 0.75 or 0.94
-			btn.TextColor3 = on and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 185)
-		end
-	end
-
-	for _, mode in ipairs({
-		{ key = "delay", label = "On the delay" },
-		{ key = "count", label = "When bag hits" },
-	}) do
-		local btn = pillButton(modeRow, mode.label, 130)
-		buttons[mode.key] = btn
-		btn.MouseButton1Click:Connect(function()
-			Sell.mode = mode.key
-			paint()
-		end)
-	end
-	paint()
-	RemoteRepaint.sellMode = function(mode)
-		Sell.mode = mode
-		paint()
-	end
-
-	RemoteWidgets.sellThreshold = select(2, createSlider(sellPage, 112, "Sell when carrying", 1, 200, Sell.threshold, " crops", function(v)
-		Sell.threshold = math.max(1, math.floor(v + 0.5))
-	end))
-
-	local note = Instance.new("TextLabel")
-	note.BackgroundTransparency = 1
-	note.Position = UDim2.new(0, 16, 0, 156)
-	note.Size = UDim2.new(1, -32, 0, 30)
-	note.Font = Enum.Font.Gotham
-	note.Text = ""
-	note.TextColor3 = Color3.fromRGB(200, 200, 205)
-	note.TextSize = 11
-	note.TextWrapped = true
-	note.TextXAlignment = Enum.TextXAlignment.Left
-	note.TextYAlignment = Enum.TextYAlignment.Top
-	note.Parent = sellPage
-
-	task.spawn(function()
-		while task.wait(0.4) do
-			if Sell.mode == "count" then
-				note.Text = string.format("Carrying %d of %d crops.", Sell.carrying, Sell.threshold)
-			else
-				note.Text = "Selling every " .. string.format("%.3f", SellInterval) .. "s."
-			end
-		end
-	end)
-end
-
 --========================================================
 -- STATS page
 --========================================================
@@ -3363,22 +3140,18 @@ statsStatusLabel.TextSize = 11
 statsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statsStatusLabel.Parent = statsPage
 
--- One table rather than eight locals: the main chunk sits right on
--- Lua's 200-locals limit, and these were the cheapest eight to reclaim.
-local StatValue = {
-	elapsed = createStatRow(statsPage, 20, "Elapsed time"),
-	earned = createStatRow(statsPage, 44, "Earned so far"),
-	spent = createStatRow(statsPage, 68, "Spent so far"),
-	net = createStatRow(statsPage, 92, "Net so far"),
-	perSec = createStatRow(statsPage, 124, "Per second"),
-	perMin = createStatRow(statsPage, 148, "Per minute"),
-	perHour = createStatRow(statsPage, 172, "Per hour"),
-	perDay = createStatRow(statsPage, 196, "Per day"),
-}
+local elapsedValue = createStatRow(statsPage, 20, "Elapsed time")
+local earnedValue = createStatRow(statsPage, 44, "Earned so far")
+local spentValue = createStatRow(statsPage, 68, "Spent so far")
+local netValue = createStatRow(statsPage, 92, "Net so far")
+local perSecValue = createStatRow(statsPage, 124, "Per second")
+local perMinValue = createStatRow(statsPage, 148, "Per minute")
+local perHourValue = createStatRow(statsPage, 172, "Per hour")
+local perDayValue = createStatRow(statsPage, 196, "Per day")
 
 local function refreshStatsUI()
 	local elapsed = tick() - StatsStartTime
-	StatValue.elapsed.Text = formatElapsed(elapsed)
+	elapsedValue.Text = formatElapsed(elapsed)
 
 	if not StatsStartingSheckles then
 		if SheckleSearchFailed then
@@ -3388,28 +3161,28 @@ local function refreshStatsUI()
 			statsStatusLabel.Text = "Detecting game data..."
 			statsStatusLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
 		end
-		StatValue.earned.Text = "—"
-		StatValue.spent.Text = "—"
-		StatValue.net.Text = "—"
-		StatValue.perSec.Text = "—"
-		StatValue.perMin.Text = "—"
-		StatValue.perHour.Text = "—"
-		StatValue.perDay.Text = "—"
+		earnedValue.Text = "—"
+		spentValue.Text = "—"
+		netValue.Text = "—"
+		perSecValue.Text = "—"
+		perMinValue.Text = "—"
+		perHourValue.Text = "—"
+		perDayValue.Text = "—"
 		return
 	end
 
 	statsStatusLabel.Text = "Tracking · " .. tostring(sheckleSource or "?")
 	statsStatusLabel.TextColor3 = Color3.fromRGB(120, 255, 170)
 
-	StatValue.earned.Text = formatNumber(TotalEarned)
-	StatValue.earned.TextColor3 = Color3.fromRGB(120, 255, 170)
+	earnedValue.Text = formatNumber(TotalEarned)
+	earnedValue.TextColor3 = Color3.fromRGB(120, 255, 170)
 
-	StatValue.spent.Text = formatNumber(TotalSpent)
-	StatValue.spent.TextColor3 = Color3.fromRGB(255, 140, 140)
+	spentValue.Text = formatNumber(TotalSpent)
+	spentValue.TextColor3 = Color3.fromRGB(255, 140, 140)
 
 	local net = TotalEarned - TotalSpent
-	StatValue.net.Text = formatNumber(net)
-	StatValue.net.TextColor3 = net >= 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
+	netValue.Text = formatNumber(net)
+	netValue.TextColor3 = net >= 0 and Color3.fromRGB(120, 255, 170) or Color3.fromRGB(255, 140, 140)
 
 	-- Small rates need decimals: formatNumber rounds to whole Sheckles,
 	-- so a real per-second rate of 0.4 was displaying as a flat 0 and
@@ -3422,10 +3195,10 @@ local function refreshStatsUI()
 	end
 
 	local rate = elapsed > 0 and (net / elapsed) or 0
-	StatValue.perSec.Text = formatRate(rate)
-	StatValue.perMin.Text = formatRate(rate * 60)
-	StatValue.perHour.Text = formatRate(rate * 3600)
-	StatValue.perDay.Text = formatRate(rate * 86400)
+	perSecValue.Text = formatRate(rate)
+	perMinValue.Text = formatRate(rate * 60)
+	perHourValue.Text = formatRate(rate * 3600)
+	perDayValue.Text = formatRate(rate * 86400)
 end
 
 -- Sampling runs every frame, NOT on the UI's refresh interval.
@@ -3585,16 +3358,11 @@ do
 		PlantEnabled = switch("plantEnabled", config.plantEnabled, PlantEnabled)
 		PlantInterval = slider("plantInterval", config.plantInterval, PlantInterval, 0.001, 10)
 
-		Harvest.enabled = switch("harvestEnabled", config.harvestEnabled, Harvest.enabled)
-		Harvest.interval = slider("harvestInterval", config.harvestInterval, Harvest.interval, 0.001, 10)
-		Harvest.biggest = switch("harvestBiggest", config.harvestBiggest, Harvest.biggest)
+		HarvestEnabled = switch("harvestEnabled", config.harvestEnabled, HarvestEnabled)
+		HarvestInterval = slider("harvestInterval", config.harvestInterval, HarvestInterval, 0.001, 10)
 
 		SellEnabled = switch("sellEnabled", config.sellEnabled, SellEnabled)
 		SellInterval = slider("sellInterval", config.sellInterval, SellInterval, 0.001, 10)
-		Sell.threshold = slider("sellThreshold", config.sellThreshold, Sell.threshold, 1, 200)
-		if (config.sellMode == "delay" or config.sellMode == "count") and config.sellMode ~= Sell.mode then
-			if RemoteRepaint.sellMode then RemoteRepaint.sellMode(config.sellMode) end
-		end
 
 		CollectEnabled = switch("collectEnabled", config.collectEnabled, CollectEnabled)
 		CollectEverything = switch("collectEverything", config.collectEverything, CollectEverything)
@@ -3603,28 +3371,6 @@ do
 
 		-- Low power lives further down the file than this block, so it's
 		-- driven purely through its widget, which owns the variable.
-		if type(config.rejoinEnabled) == "boolean" and RemoteWidgets.rejoinEnabled then
-			RemoteWidgets.rejoinEnabled(config.rejoinEnabled)
-		end
-		if type(config.rejoinMemHold) == "number" and RemoteWidgets.rejoinMemHold then
-			RemoteWidgets.rejoinMemHold(config.rejoinMemHold)
-		end
-		if type(config.rejoinFpsHold) == "number" and RemoteWidgets.rejoinFpsHold then
-			RemoteWidgets.rejoinFpsHold(config.rejoinFpsHold)
-		end
-		if type(config.rejoinNudge) == "number" and RemoteWidgets.rejoinNudge then
-			RemoteWidgets.rejoinNudge(config.rejoinNudge)
-		end
-		if type(config.rejoinPercent) == "number" and RemoteWidgets.rejoinPercent then
-			RemoteWidgets.rejoinPercent(config.rejoinPercent)
-		end
-		if type(config.rejoinRam) == "number" and RemoteWidgets.rejoinRam then
-			RemoteWidgets.rejoinRam(config.rejoinRam)
-		end
-		if type(config.rejoinFps) == "number" and RemoteWidgets.rejoinFps then
-			RemoteWidgets.rejoinFps(config.rejoinFps)
-		end
-
 		if type(config.lowPower) == "boolean" and RemoteWidgets.lowPower then
 			RemoteWidgets.lowPower(config.lowPower)
 		end
@@ -3676,7 +3422,7 @@ do
 			lastSeed = PlantLastFired,
 			bought = BuyFiredCount,
 			plantEnabled = PlantEnabled,
-			harvestEnabled = Harvest.enabled,
+			harvestEnabled = HarvestEnabled,
 			sellEnabled = SellEnabled,
 			collectEnabled = CollectEnabled,
 			statsReady = StatsStartingSheckles ~= nil,
@@ -3694,31 +3440,15 @@ do
 				buyInterval = BuyInterval,
 				plantEnabled = PlantEnabled,
 				plantInterval = PlantInterval,
-				harvestEnabled = Harvest.enabled,
-				harvestInterval = Harvest.interval,
-			harvestBiggest = Harvest.biggest,
-				harvestBiggest = Harvest.biggest,
+				harvestEnabled = HarvestEnabled,
+				harvestInterval = HarvestInterval,
 				sellEnabled = SellEnabled,
 				sellInterval = SellInterval,
-				sellThreshold = Sell.threshold,
-				sellMode = Sell.mode,
 				collectEnabled = CollectEnabled,
 				collectEverything = CollectEverything,
 				collectReturn = CollectReturn,
 				collectDwell = CollectDwell,
 				lowPower = RemoteReaders.lowPower and RemoteReaders.lowPower() or false,
-				rejoinEnabled = Rejoin.enabled,
-				rejoinFps = Rejoin.fpsFloor,
-			rejoinRam = Rejoin.ramGb,
-			rejoinPercent = Rejoin.percent,
-			rejoinNudge = Rejoin.fpsNudge,
-			rejoinMemHold = Rejoin.memHold,
-			rejoinFpsHold = Rejoin.fpsHold,
-				rejoinRam = Rejoin.ramGb,
-				rejoinPercent = Rejoin.percent,
-				rejoinNudge = Rejoin.fpsNudge,
-				rejoinMemHold = Rejoin.memHold,
-				rejoinFpsHold = Rejoin.fpsHold,
 				shovelEnabled = Shovel.enabled,
 				shovelInterval = Shovel.interval,
 			},
@@ -3726,8 +3456,6 @@ do
 			shovelStatus = Shovel.status,
 			gardenPlants = Shovel.names,
 			fps = RemoteReaders.fps and RemoteReaders.fps() or nil,
-			memoryMb = Rejoin.mb,
-			memoryCeilingMb = Rejoin.ceilingMb,
 			-- The catalogue and the current selections, so the site can
 			-- draw the same rows with the same switches rather than
 			-- asking you to type item names.
@@ -3823,9 +3551,9 @@ end
 -- and this panel are 2D, so switching off the world leaves everything
 -- you actually watch while farming, at a fraction of the cost.
 --========================================================
+local LowPower = false
+
 do
-	local healthPage = pages.Health
-	local LowPower = false
 	local RunService = game:GetService("RunService")
 
 	local perfGui = Instance.new("ScreenGui")
@@ -3915,81 +3643,10 @@ do
 
 	RemoteReaders.lowPower = function() return LowPower end
 
-	RemoteWidgets.lowPower = select(2, createToggleRow(healthPage, 0, "Low power (stop drawing the world)", LowPower, function(state)
+	RemoteWidgets.lowPower = select(2, createToggleRow(statsPage, 232, "Low power (stop drawing the world)", LowPower, function(state)
 		LowPower = state
 		applyLowPower(state)
 	end))
-
-	RemoteWidgets.rejoinEnabled = select(2, createToggleRow(healthPage, 30, "Rejoin before the client dies", Rejoin.enabled, function(state)
-		Rejoin.enabled = state
-	end))
-
-	-- Typed, not dragged: you know this number, and 0 means work it out.
-	RemoteWidgets.rejoinRam = select(2, createSlider(healthPage, 62, "My device RAM (0 = auto)", 0, 32, Rejoin.ramGb, " GB", function(v)
-		Rejoin.ramGb = math.max(0, v)
-	end))
-
-	RemoteWidgets.rejoinPercent = select(2, createSlider(healthPage, 106, "Rejoin at", 10, 95, Rejoin.percent, "%", function(v)
-		Rejoin.percent = math.clamp(math.floor(v + 0.5), 10, 95)
-	end))
-
-	RemoteWidgets.rejoinFps = select(2, createSlider(healthPage, 150, "Nudge down under", 1, 30, Rejoin.fpsFloor, " fps", function(v)
-		Rejoin.fpsFloor = math.max(1, math.floor(v + 0.5))
-	end))
-
-	RemoteWidgets.rejoinNudge = select(2, createSlider(healthPage, 194, "Lower it by", 0, 50, Rejoin.fpsNudge, "%", function(v)
-		Rejoin.fpsNudge = math.clamp(math.floor(v + 0.5), 0, 50)
-	end))
-
-	-- How long each signal has to persist. Memory settles after loading
-	-- and frame rate dips for a moment all the time, so acting on either
-	-- instantly would rejoin you for nothing.
-	RemoteWidgets.rejoinMemHold = select(2, createSlider(healthPage, 238, "Memory must hold for", 5, 120, Rejoin.memHold, "s", function(v)
-		Rejoin.memHold = math.max(5, math.floor(v + 0.5))
-	end))
-
-	RemoteWidgets.rejoinFpsHold = select(2, createSlider(healthPage, 282, "Low fps must hold for", 5, 300, Rejoin.fpsHold, "s", function(v)
-		Rejoin.fpsHold = math.max(5, math.floor(v + 0.5))
-	end))
-
-	-- The defaults are the recommendation. Saved settings quietly
-	-- override them, and a slider you nudged three sessions ago is
-	-- indistinguishable from one you meant to set — so there's a way
-	-- back to them.
-	local resetBtn = pillButton(healthPage, "Reset to defaults", 150)
-	resetBtn.Position = UDim2.new(0, 16, 0, 326)
-	resetBtn.Size = UDim2.new(0, 150, 0, 24)
-	resetBtn.TextSize = 11
-	resetBtn.MouseButton1Click:Connect(function()
-		if RemoteWidgets.rejoinRam then RemoteWidgets.rejoinRam(0) end
-		if RemoteWidgets.rejoinPercent then RemoteWidgets.rejoinPercent(70) end
-		if RemoteWidgets.rejoinFps then RemoteWidgets.rejoinFps(12) end
-		if RemoteWidgets.rejoinNudge then RemoteWidgets.rejoinNudge(10) end
-		if RemoteWidgets.rejoinMemHold then RemoteWidgets.rejoinMemHold(15) end
-		if RemoteWidgets.rejoinFpsHold then RemoteWidgets.rejoinFpsHold(30) end
-	end)
-
-	local rejoinNote = Instance.new("TextLabel")
-	rejoinNote.BackgroundTransparency = 1
-	rejoinNote.Position = UDim2.new(0, 16, 0, 358)
-	rejoinNote.Size = UDim2.new(1, -32, 0, 14)
-	rejoinNote.Font = Enum.Font.Gotham
-	rejoinNote.Text = ""
-	rejoinNote.TextColor3 = Color3.fromRGB(200, 200, 205)
-	rejoinNote.TextSize = 10
-	rejoinNote.TextXAlignment = Enum.TextXAlignment.Left
-	rejoinNote.Parent = healthPage
-
-	task.spawn(function()
-		while task.wait(1) do
-			rejoinNote.Text = Rejoin.status
-			-- Amber once memory is within a tenth of the limit, so you see
-			-- it coming rather than only after it acts.
-			rejoinNote.TextColor3 = (Rejoin.enabled and Rejoin.mb > 0 and Rejoin.status:find("over"))
-				and Color3.fromRGB(255, 200, 130)
-				or Color3.fromRGB(200, 200, 205)
-		end
-	end)
 end
 
 --========================================================
@@ -4118,14 +3775,10 @@ do
 			plantEnabled = PlantEnabled,
 			plantInterval = PlantInterval,
 			plantMode = PlantMode,
-			harvestEnabled = Harvest.enabled,
-			harvestInterval = Harvest.interval,
+			harvestEnabled = HarvestEnabled,
+			harvestInterval = HarvestInterval,
 			sellEnabled = SellEnabled,
 			sellInterval = SellInterval,
-			sellMode = Sell.mode,
-			sellThreshold = Sell.threshold,
-			rejoinEnabled = Rejoin.enabled,
-			rejoinFps = Rejoin.fpsFloor,
 			collectEnabled = CollectEnabled,
 			collectEverything = CollectEverything,
 			collectReturn = CollectReturn,
@@ -4172,9 +3825,6 @@ do
 			pcall(RemoteRepaint.shovel)
 		end
 
-		if saved.sellMode and RemoteRepaint.sellMode then
-			pcall(RemoteRepaint.sellMode, saved.sellMode)
-		end
 		if saved.plantMode and RemoteRepaint.plantMode then
 			pcall(RemoteRepaint.plantMode, saved.plantMode)
 		end
@@ -4269,258 +3919,21 @@ do
 	end)
 end
 
-
 --========================================================
--- REJOIN BEFORE THE CLIENT DIES
+-- SURVIVING A REJOIN
 --
--- Long sessions bloat: the game's own telemetry reported 1.5GB and a
--- 17ms 90th-percentile frame on this farm. Left alone the client
--- eventually crashes, which ends the night's farming at whatever hour it
--- happened.
---
--- Rejoining is a controlled version of the same thing: settings are
--- written to disk first, the loadstring is queued for the other side, so
--- the script comes back up already configured and keeps going.
+-- Only the executor can run something the moment a game starts (its
+-- autoexec folder), but a teleport or server hop is not a fresh start —
+-- it kills every script without touching autoexec. queue_on_teleport
+-- runs this again on the other side, so switching servers, hopping, or
+-- being sent to another world brings the panel straight back with your
+-- saved settings already applied.
 --========================================================
-local Rejoin = {
-	enabled = false,
-	mb = 0,
-	ramGb = 0, -- your device's RAM, if you tell it; 0 means work it out
-	percent = 70, -- how much of it to use before rejoining
-	fpsFloor = 12, -- sustained frames per second below this counts as struggling
-	fpsNudge = 10, -- percent to lower the limit by while it struggles; 0 disables
-	memHold = 15, -- seconds memory must stay over the limit before acting
-	fpsHold = 30, -- seconds the frame rate must stay low before it counts
-	peakMb = 0, -- highest this session
-	ceilingMb = 0, -- highest ever seen on this device, across sessions
-	status = "off",
-}
-
 do
-	local TeleportService = game:GetService("TeleportService")
-	local StatsService = game:GetService("Stats")
 	local SELF = "https://raw.githubusercontent.com/ForgeApc/scriptEXEr/main/scripts/grow-a-garden-2-autobuy.lua"
+	local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
 
-	-- Roblox gives no way to read the device's total RAM: Stats reports
-	-- what the client is using, not what the machine has. So the ceiling
-	-- is learned instead — the highest figure this device has ever
-	-- reached, remembered across sessions in the settings file, which is
-	-- a better guide than any guess about the hardware.
-	--
-	-- Rejoining at 70% of that keeps a wide margin: the peak is where it
-	-- was still alive, and the crash is somewhere above it.
-	local CEILING_FILE = "scriptexer_gag2_memory.txt"
-	local FLOOR_MB = 1200 -- never rejoin below this, whatever it works out
-
-	local function loadCeiling()
-		if type(readfile) ~= "function" or type(isfile) ~= "function" then return 0 end
-		local ok, value = pcall(function()
-			if isfile(CEILING_FILE) then return tonumber(readfile(CEILING_FILE)) end
-			return nil
-		end)
-		return (ok and value) or 0
+	if type(queue) == "function" then
+		pcall(queue, 'loadstring(game:HttpGet("' .. SELF .. '"))()')
 	end
-
-	local function saveCeiling(value)
-		if type(writefile) ~= "function" then return end
-		pcall(writefile, CEILING_FILE, tostring(math.floor(value)))
-	end
-
-	local function autoLimit()
-		-- If you've told it how much RAM the device has, that beats
-		-- anything it could infer: a real number about the machine
-		-- rather than the highest figure it happens to have survived.
-		local fraction = math.clamp(Rejoin.percent, 10, 95) / 100
-
-		if Rejoin.ramGb and Rejoin.ramGb > 0 then
-			return math.max(FLOOR_MB, Rejoin.ramGb * 1024 * fraction)
-		end
-
-		local ceiling = Rejoin.ceilingMb
-		if ceiling <= 0 then
-			-- Nothing learned yet. Sit above the floor and let the first
-			-- session teach it.
-			return math.max(FLOOR_MB, 2500)
-		end
-		return math.max(FLOOR_MB, ceiling * fraction)
-	end
-
-	local function memoryMb()
-		local ok, value = pcall(function()
-			return StatsService:GetTotalMemoryUsageMb()
-		end)
-		if ok and type(value) == "number" then return value end
-
-		-- Executors without the Stats API still have Lua's own counter.
-		-- It only sees Lua memory, not the whole client, but it moves in
-		-- the same direction.
-		local okGc, kb = pcall(collectgarbage, "count")
-		return okGc and (kb / 1024) or 0
-	end
-
-	local function rejoin()
-		Rejoin.status = "rejoining…"
-
-		-- Queue first: if the teleport lands before this runs, the
-		-- script doesn't come back.
-		--
-		-- The queued line sets a flag before loading, so the copy that
-		-- wakes up on the other side knows it arrived from a rejoin and
-		-- has a loading gate to hold through.
-		local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
-		if type(queue) == "function" then
-			pcall(
-				queue,
-				'getgenv().SCRIPTEXER_REJOINED = true\n'
-					.. 'loadstring(game:HttpGet("' .. SELF .. '"))()'
-			)
-		end
-
-		-- Give the settings writer a moment to flush the current state.
-		task.wait(1.5)
-
-		-- The world you're in is its own place — Garden Valley, Fall
-		-- Harvest, Maple and so on all have different PlaceIds. Read at
-		-- teleport time, so a rejoin puts you back where you were farming
-		-- rather than in the default world.
-		local ok = pcall(function()
-			TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
-		end)
-		if not ok then
-			Rejoin.status = "teleport refused — still running"
-		end
-	end
-
-	Rejoin.ceilingMb = loadCeiling()
-
-	task.spawn(function()
-		local overSince = nil
-		local slowSince = nil
-
-		while task.wait(5) do
-			if Shovel.stopped then return end
-
-			Rejoin.mb = memoryMb()
-
-			-- Every new high teaches the device's ceiling a little more.
-			if Rejoin.mb > Rejoin.peakMb then
-				Rejoin.peakMb = Rejoin.mb
-				if Rejoin.mb > Rejoin.ceilingMb then
-					Rejoin.ceilingMb = Rejoin.mb
-					saveCeiling(Rejoin.mb)
-				end
-			end
-
-			local limit = autoLimit()
-			-- How much a struggling frame rate matters is yours to set:
-			-- 10% by default, 0 to ignore frame rate entirely.
-			if struggling and Rejoin.fpsNudge > 0 then
-				limit = limit * (1 - math.clamp(Rejoin.fpsNudge, 0, 50) / 100)
-			end
-
-			-- Memory is the clearest signal but not the only one: a client
-			-- can be dying on frame time while memory looks unremarkable,
-			-- and by the time it crawls it is about to go. Requiring the
-			-- low frame rate to be sustained keeps a loading hitch or a
-			-- busy moment from triggering a rejoin.
-			local fps = RemoteReaders.fps and RemoteReaders.fps() or nil
-			if fps and fps <= Rejoin.fpsFloor then
-				slowSince = slowSince or tick()
-			else
-				slowSince = nil
-			end
-			-- A small factor by design. A struggling frame rate pulls the
-			-- memory limit down by a tenth rather than forcing a rejoin
-			-- on its own: frame rate dips for all sorts of innocent
-			-- reasons, memory only goes one way.
-			local struggling = slowSince ~= nil and (tick() - slowSince) >= Rejoin.fpsHold
-
-			if not Rejoin.enabled then
-				Rejoin.status = "off"
-				overSince = nil
-				slowSince = nil
-			elseif Rejoin.mb >= limit then
-				-- Held for a while before acting: memory spikes during
-				-- loading and settles, and rejoining on a spike would put
-				-- you in a loop of rejoining forever. How long is yours
-				-- to set.
-				overSince = overSince or tick()
-				if tick() - overSince >= Rejoin.memHold then
-					rejoin()
-					return
-				end
-				Rejoin.status = string.format("%.0fMB of %.0fMB — over, watching", Rejoin.mb, limit)
-			else
-				overSince = nil
-				Rejoin.status = string.format(
-					"%.0fMB · %s · rejoins at %.0fMB%s%s",
-					Rejoin.mb,
-					fps and (fps .. " fps") or "fps unknown",
-					limit,
-					(struggling and Rejoin.fpsNudge > 0)
-						and string.format(" (down %d%% — frame rate struggling)", Rejoin.fpsNudge)
-						or "",
-					string.format(
-						" (%d%% of %s)",
-						Rejoin.percent,
-						Rejoin.ramGb > 0
-							and (string.format("%.0f", Rejoin.ramGb) .. "GB")
-							or (string.format("%.0f", Rejoin.ceilingMb) .. "MB seen")
-					)
-				)
-			end
-		end
-	end)
-end
-
---========================================================
--- THROUGH THE LOADING GATES
---
--- A rejoin doesn't land you in the game: there's a screen to hold past,
--- then another once the world loads, then the "what your garden became
--- while you were away" summary. Nothing else in the script matters if
--- it's sitting behind those.
---
--- Rather than time each gate exactly — they take different amounts of
--- time depending on how long you were gone and how big the farm is —
--- this just holds the screen in eight second presses with a second
--- between them, for about a minute and three quarters. Extra presses
--- once you're through land on the world and do nothing.
---
--- Only after a rejoin: doing this on a normal manual run would press the
--- screen while you're using it.
---========================================================
-if getgenv and getgenv().SCRIPTEXER_REJOINED then
-	getgenv().SCRIPTEXER_REJOINED = false
-
-	task.spawn(function()
-		local VIM = nil
-		pcall(function() VIM = game:GetService("VirtualInputManager") end)
-		if not VIM then return end
-
-		local function press(down)
-			local camera = Workspace.CurrentCamera
-			local size = camera and camera.ViewportSize or Vector2.new(800, 600)
-			pcall(function()
-				VIM:SendMouseButtonEvent(size.X / 2, size.Y / 2, 0, down, game, 0)
-			end)
-		end
-
-		-- Don't press anything before the client is up.
-		if not game:IsLoaded() then
-			game.Loaded:Wait()
-		end
-		task.wait(2)
-
-		local deadline = tick() + 105
-		while tick() < deadline do
-			press(true)
-			task.wait(8)
-			press(false)
-			task.wait(1)
-		end
-
-		-- Never leave the button stuck down if the loop is interrupted.
-		press(false)
-	end)
 end
